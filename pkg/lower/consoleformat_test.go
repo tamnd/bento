@@ -75,17 +75,46 @@ func TestOrdinaryConsoleCallsKeepThePerArgumentPath(t *testing.T) {
 	}
 }
 
-// TestAFormatStringWithAnUnboxableArgumentHandsBack is the rule's failure mode, and it
-// fails loudly on purpose. The call must be formatted to print the right thing, an
-// argument cannot be boxed to format it, so the build stops rather than emitting a
-// line with a bare %s in it.
-// The unboxable argument is a union parameter, which the per-argument path renders
-// arm by arm through the union's own ToString and the boxing path hands back on, so
-// the two halves of this decision differ only in the first argument.
-func TestAFormatStringWithAnUnboxableArgumentHandsBack(t *testing.T) {
-	prog := compileTolerant(t, `function show(u: string | number): void { console.log("%s", u); }
+// TestAFormatStringWithAUnionArgumentFormats covers the argument that used to be the
+// rule's failure mode. A union parameter had no dynamic form, so a call that had to be
+// formatted to print the right thing stopped the build rather than emit a line with a
+// bare %s in it. It boxes through the union's own ToValue now, so the call formats.
+func TestAFormatStringWithAUnionArgumentFormats(t *testing.T) {
+	skipIfShort(t)
+	const src = `function show(u: string | number): void { console.log("%s", u); }
 show(1);
-show("x");`)
+show("x");
+`
+	if got := runProgramGo(t, src); got != "1\nx\n" {
+		t.Fatalf("got %q, want %q", got, "1\nx\n")
+	}
+}
+
+// TestARuntimeStringWithAUnionArgumentFormats is the other half of that decision, and
+// the half that was quietly wrong. A first argument that may or may not hold a
+// specifier could not refuse the build, so it fell back to a join through the union's
+// own ToString and printed "v=%s! 2" where Node prints "v=2!". The union boxes now, so
+// the call reaches the format path and the specifier is honoured.
+func TestARuntimeStringWithAUnionArgumentFormats(t *testing.T) {
+	skipIfShort(t)
+	const src = `function show(prefix: string, u: string | number): void { console.log(prefix, u); }
+show("p", 1);
+show("v=%s!", 2);
+show("%d items", "no");
+`
+	want := "p 1\nv=2!\nNaN items\n"
+	if got := runProgramGo(t, src); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// TestAFormatStringWithAnUnboxableArgumentHandsBack keeps the rule's failure mode
+// pinned on an argument that still has no dynamic form. A function-valued element reads
+// as undefined to the reflection walk, so an array of them does not box, and a call
+// that must be formatted stops the build rather than print the wrong line.
+func TestAFormatStringWithAnUnboxableArgumentHandsBack(t *testing.T) {
+	prog := compileTolerant(t, `const fns = [() => 1];
+console.log("%s", fns);`)
 	r := NewRenderer(prog)
 	_, err := r.RenderProgram(entryFile(t, prog))
 	if err == nil {
@@ -97,19 +126,24 @@ show("x");`)
 	}
 }
 
-// TestARuntimeStringWithAnUnboxableArgumentFallsBack is the other half of that
-// decision. Here the first argument may not hold a specifier at all, so refusing the
-// build would reject a program bento used to compile; it falls back to the join it
-// printed before: the same union argument the test above refuses is printed here
-// through its own ToString, one argument at a time.
+// TestARuntimeStringWithAnUnboxableArgumentFallsBack pins the other half of the rule on
+// the same argument: a first argument whose text is unknown may not hold a specifier at
+// all, so the format path lets the call go rather than refuse it, and whatever the
+// per-argument path says about the argument is what the reader is told.
+//
+// The per-argument path boxes an array too, so this still stops the build today. What
+// it must not do is stop it in the format path's name, since that would tell a reader
+// the specifier was the problem when the first argument may spell none.
 func TestARuntimeStringWithAnUnboxableArgumentFallsBack(t *testing.T) {
-	got := renderProgram(t, `function show(prefix: string, u: string | number): void { console.log(prefix, u); }
-show("p", 1);
-show("p", "x");`)
-	if strings.Contains(got, "value.ConsoleFormat(") {
-		t.Errorf("formatted an unboxable argument, want the per-argument fallback:\n%s", got)
+	prog := compileTolerant(t, `const fns = [() => 1];
+function show(prefix: string): void { console.log(prefix, fns); }
+show("p");`)
+	r := NewRenderer(prog)
+	_, err := r.RenderProgram(entryFile(t, prog))
+	if err == nil {
+		return
 	}
-	if !strings.Contains(got, "value.ConsoleLog(prefix, u.ToString())") {
-		t.Errorf("did not emit the per-argument join:\n%s", got)
+	if strings.Contains(err.Error(), "with a format string") {
+		t.Errorf("a runtime first argument claimed the format path: %q", err.Error())
 	}
 }
