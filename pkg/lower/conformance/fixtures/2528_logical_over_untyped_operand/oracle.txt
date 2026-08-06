@@ -1,0 +1,13 @@
+== stdout:
+and-right
+and-left
+chain
+or-negated
+object
+object
+undefined true
+both
+2
+
+== exit:
+0

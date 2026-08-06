@@ -589,6 +589,18 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.callOfGrowingObjectFunc(n) {
 		return true
 	}
+	// A value-returning && or || over a dynamic operand lowers to value.And, value.Or,
+	// or the lazy func around them (logical.go), each of which yields a box. The checker
+	// often gives such an expression no type at all, since the operands include a
+	// require()'d module or another shape it cannot name, so reading dynamic off the
+	// type alone would miss it and the expression would hand back in every position that
+	// asks. Recognizing it by shape is what lets `if (a && os)` take the ToBoolean the
+	// dynamic path already spells, and what lets a chain nest: the left operand of the
+	// outer && is itself a logical, so the outer one only reads as dynamic if the inner
+	// one does.
+	if r.isDynamicValueLogical(n) {
+		return true
+	}
 	// A property or element read off a dynamic receiver lowers to a Get on the box,
 	// which yields a box unless the read's own type is a clean primitive that
 	// unboxDynamicRead coerces down. So the read is itself dynamic when its type is not
@@ -2444,11 +2456,24 @@ func (r *Renderer) isBoxedArrayElemRead(src frontend.Node) bool {
 // a concrete primitive: sym && true is typed boolean because a symbol is always
 // truthy, so without this the primitive box path would wrap the already-boxed
 // result in value.Bool and emit value.Bool(value.And(...)), which does not
-// type-check. The condition mirrors valueLogical's dynamic branch exactly, so it
-// says true for precisely the shapes that lower to a box and false for the
-// static-truthy collapse, the two-boolean operator case, and the same-primitive
-// IIFE, none of which return a value.Value.
+// type-check. The condition mirrors valueLogical's own branching exactly, so it says
+// true for precisely the shapes that lower to a box: it follows the static-truthy
+// collapse to whichever operand survives and asks that one, and says false for the
+// two-boolean operator case and the same-primitive IIFE, neither of which returns a
+// value.Value.
 func (r *Renderer) isDynamicValueLogical(src frontend.Node) bool {
+	// Parentheses around a logical are how it usually appears in boolean position,
+	// !(a || b) and while ((m = re.exec(s)) && n) among them, so the node the caller
+	// holds is the parenthesized expression rather than the operator. Seeing through it
+	// here is what lets the operand be recognized at all; the parentheses themselves
+	// lower to nothing.
+	for src.Kind() == frontend.NodeParenthesizedExpression {
+		kids := r.prog.Children(src)
+		if len(kids) != 1 {
+			return false
+		}
+		src = kids[0]
+	}
 	if src.Kind() != frontend.NodeBinaryExpression {
 		return false
 	}
@@ -2461,10 +2486,21 @@ func (r *Renderer) isDynamicValueLogical(src frontend.Node) bool {
 	if opText != "&&" && opText != "||" {
 		return false
 	}
-	// A left operand the checker proved always truthy or always falsy collapses to a
-	// single operand with no box, so it is not a boxed logical.
-	if _, known := r.staticTruthy(left); known && r.repeatableOperand(left) {
-		return false
+	// A left operand the checker proved always truthy or always falsy fixes which
+	// operand the result is, so the expression collapses to that one and is a box
+	// exactly when that operand is. The side-effecting form wraps the same answer in a
+	// func that runs the left first and returns the right, so it reads the right; a left
+	// that is not an always-truthy object reports handled=false over there and lowers
+	// through the operator table, which returns no box.
+	if v, known := r.staticTruthy(left); known {
+		chosen := right
+		if (opText == "||") == v {
+			chosen = left
+		}
+		if chosen == left || r.repeatableOperand(left) {
+			return r.isDynamic(chosen)
+		}
+		return r.prog.TypeAt(left).Flags == frontend.TypeObject && r.isDynamic(right)
 	}
 	// Two booleans keep Go's own operator and give a Go bool, not a box.
 	if r.isBool(left) && r.isBool(right) {

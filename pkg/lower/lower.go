@@ -45,10 +45,42 @@ type NotYetLowerable struct {
 	// Reason is a short human explanation of why this construct is not lowered
 	// yet, phrased as the boundary it hit.
 	Reason string
+	// Where is the source position of the construct, empty when the handback was
+	// raised somewhere with no node in hand. A reason names a shape, and a program
+	// the size of a Node test has many of that shape, so the reason on its own says
+	// what is missing and not where to look. Finding the one line behind a family of
+	// a thousand tests meant bisecting the file by hand twice before this was here.
+	Where string
 }
 
 func (e *NotYetLowerable) Error() string {
+	if e.Where != "" {
+		return fmt.Sprintf("%s: not yet lowerable (flags %v): %s", e.Where, e.Flags, e.Reason)
+	}
 	return fmt.Sprintf("not yet lowerable (flags %v): %s", e.Flags, e.Reason)
+}
+
+// notLowerable builds a handback that names where it happened as well as what it hit,
+// taking the type flags off the same node so a call site spells the reason and nothing
+// else. A site with no node in hand still builds a NotYetLowerable directly and reads
+// the way it always did.
+func (r *Renderer) notLowerable(n frontend.Node, reason string) *NotYetLowerable {
+	return &NotYetLowerable{Flags: r.prog.TypeAt(n).Flags, Reason: reason, Where: r.posOf(n)}
+}
+
+// posOf renders a node's start as file:line:column, both one-based, which is what an
+// editor and a terminal that turns it into a link expect. The frontend keeps the column
+// zero-based because the checker does, so the one is added here rather than there.
+func (r *Renderer) posOf(n frontend.Node) string {
+	if n == nil {
+		return ""
+	}
+	f := n.File()
+	if f.Path == "" {
+		return ""
+	}
+	p := r.prog.LineColumn(f, n.Pos())
+	return fmt.Sprintf("%s:%d:%d", f.Path, p.Line, p.Column+1)
 }
 
 // Renderer renders the types of one checked program to Go. It accumulates the

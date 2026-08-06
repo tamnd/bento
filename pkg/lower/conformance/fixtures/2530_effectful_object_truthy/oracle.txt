@@ -1,0 +1,11 @@
+== stdout:
+truthy 1
+false 2
+yes 3
+true 4
+empty array is truthy 5
+instance is truthy 6
+binding folds 6
+
+== exit:
+0
