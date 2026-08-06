@@ -86,6 +86,13 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 			return r.newClass(info, kids[1:])
 		}
 	}
+	// A function declaration the program uses as an ES5 constructor constructs through
+	// the runtime [[Construct]], which links the new object to whatever the function's
+	// .prototype holds at that moment. It routes before every built-in below so a user
+	// function named Map or Event constructs as itself; see ctorfunc.go.
+	if r.ctorFuncRef(kids[0]) {
+		return r.newCtorFunc(kids[0], kids[1:])
+	}
 	// new Array<T>(n) builds the same *value.Array a literal does, so it is claimed
 	// here rather than reaching the generic hand-back below (newarray.go).
 	if r.prog.Text(kids[0]) == "Array" && r.isGlobalRef(kids[0], "Array") {
@@ -203,6 +210,14 @@ func (r *Renderer) newExpr(n frontend.Node) (ast.Expr, error) {
 	}
 	ctor, ok := errorCtors[r.prog.Text(kids[0])]
 	if !ok {
+		// A constructor the lowerer holds as a box, the shape one takes once it has crossed
+		// a module boundary, constructs through the same runtime [[Construct]] a declared
+		// constructor function does. It is asked after every named built-in above so a
+		// global whose own construction the runtime hosts keeps its own path, and after the
+		// error names so `new Error(msg)` stays the direct construction it was.
+		if r.ctorValueRef(kids[0]) {
+			return r.newCtorFunc(kids[0], kids[1:])
+		}
 		return nil, &NotYetLowerable{Reason: "new of a constructor other than a built-in error is a later slice"}
 	}
 	args := kids[1:]

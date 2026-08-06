@@ -27,6 +27,8 @@ type Object struct {
 	symDescs      []descriptor  // symbol property descriptors, parallel to symKeys
 	elems         []Value       // dense element storage for an array
 	call          callFn        // the invocable body of a callable, nil for a plain object
+	construct     ctorFn        // the [[Construct]] body of an ES5 constructor function, nil for anything new cannot be applied to (ctorfunc.go)
+	recv          ctorFn        // the body of a function value that reads `this`, nil for a callable with no receiver slot to fill (ctorfunc.go)
 	proto         *Object       // the [[Prototype]] a read climbs on an own miss; nil is the end of the user chain
 	protoNull     bool          // distinguishes an explicit null [[Prototype]] from the default when proto is nil; read only by SetPrototype's change test
 	nonExtensible bool          // set once Object.preventExtensions blocks new keys; zero value is extensible

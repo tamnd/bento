@@ -25,38 +25,38 @@ func main() {
 		(second)(value.ToNumber(value.Arg(__a, 0)))
 		return value.Undefined
 	}), "second")))
-	value.ConsoleLog(value.FromGoString("count"), value.ConsoleValue(bentoProcess.Get(value.FromGoString("listenerCount")).Call(value.StringValue(value.FromGoString("ping")))))
-	bentoProcess.Get(value.FromGoString("emit")).Call(value.StringValue(value.FromGoString("ping")), value.Number(1))
-	bentoProcess.Get(value.FromGoString("off")).Call(value.StringValue(value.FromGoString("ping")), value.SharedFunc("0#second", value.WithName(value.NewFunc(func(__a []value.Value) value.Value {
+	value.ConsoleLog(value.FromGoString("count"), value.ConsoleValue(value.CallMethod(bentoProcess, value.FromGoString("listenerCount"), value.StringValue(value.FromGoString("ping")))))
+	value.CallMethod(bentoProcess, value.FromGoString("emit"), value.StringValue(value.FromGoString("ping")), value.Number(1))
+	value.CallMethod(bentoProcess, value.FromGoString("off"), value.StringValue(value.FromGoString("ping")), value.SharedFunc("0#second", value.WithName(value.NewFunc(func(__a []value.Value) value.Value {
 		(second)(value.ToNumber(value.Arg(__a, 0)))
 		return value.Undefined
 	}), "second")))
-	bentoProcess.Get(value.FromGoString("emit")).Call(value.StringValue(value.FromGoString("ping")), value.Number(2))
-	value.ConsoleLog(value.FromGoString("saved"), value.ConsoleValue(bentoProcess.Get(value.FromGoString("listeners")).Call(value.StringValue(value.FromGoString("ping"))).Get(value.FromGoString("length"))))
-	bentoProcess.Get(value.FromGoString("once")).Call(value.StringValue(value.FromGoString("pong")), value.NewFunc(func(__a []value.Value) value.Value {
+	value.CallMethod(bentoProcess, value.FromGoString("emit"), value.StringValue(value.FromGoString("ping")), value.Number(2))
+	value.ConsoleLog(value.FromGoString("saved"), value.ConsoleValue(value.CallMethod(bentoProcess, value.FromGoString("listeners"), value.StringValue(value.FromGoString("ping"))).Get(value.FromGoString("length"))))
+	value.CallMethod(bentoProcess, value.FromGoString("once"), value.StringValue(value.FromGoString("pong")), value.NewFunc(func(__a []value.Value) value.Value {
 		(func(x float64) {
 			seen.Push(value.Concat(value.FromGoString("once "), value.NumberToString(x)))
 		})(value.ToNumber(value.Arg(__a, 0)))
 		return value.Undefined
 	}))
-	value.ConsoleLog(value.FromGoString("once"), value.ConsoleValue(bentoProcess.Get(value.FromGoString("emit")).Call(value.StringValue(value.FromGoString("pong")), value.Number(3))), value.ConsoleValue(bentoProcess.Get(value.FromGoString("emit")).Call(value.StringValue(value.FromGoString("pong")), value.Number(4))))
-	bentoProcess.Get(value.FromGoString("prependListener")).Call(value.StringValue(value.FromGoString("ping")), value.NewFunc(func(__a []value.Value) value.Value {
+	value.ConsoleLog(value.FromGoString("once"), value.ConsoleValue(value.CallMethod(bentoProcess, value.FromGoString("emit"), value.StringValue(value.FromGoString("pong")), value.Number(3))), value.ConsoleValue(value.CallMethod(bentoProcess, value.FromGoString("emit"), value.StringValue(value.FromGoString("pong")), value.Number(4))))
+	value.CallMethod(bentoProcess, value.FromGoString("prependListener"), value.StringValue(value.FromGoString("ping")), value.NewFunc(func(__a []value.Value) value.Value {
 		(func(x float64) {
 			seen.Push(value.Concat(value.FromGoString("pre "), value.NumberToString(x)))
 		})(value.ToNumber(value.Arg(__a, 0)))
 		return value.Undefined
 	}))
-	bentoProcess.Get(value.FromGoString("emit")).Call(value.StringValue(value.FromGoString("ping")), value.Number(5))
-	bentoProcess.Get(value.FromGoString("removeAllListeners")).Call(value.StringValue(value.FromGoString("ping")))
-	value.ConsoleLog(value.FromGoString("cleared"), value.ConsoleValue(bentoProcess.Get(value.FromGoString("emit")).Call(value.StringValue(value.FromGoString("ping")), value.Number(6))), value.ConsoleValue(bentoProcess.Get(value.FromGoString("listenerCount")).Call(value.StringValue(value.FromGoString("ping")))))
+	value.CallMethod(bentoProcess, value.FromGoString("emit"), value.StringValue(value.FromGoString("ping")), value.Number(5))
+	value.CallMethod(bentoProcess, value.FromGoString("removeAllListeners"), value.StringValue(value.FromGoString("ping")))
+	value.ConsoleLog(value.FromGoString("cleared"), value.ConsoleValue(value.CallMethod(bentoProcess, value.FromGoString("emit"), value.StringValue(value.FromGoString("ping")), value.Number(6))), value.ConsoleValue(value.CallMethod(bentoProcess, value.FromGoString("listenerCount"), value.StringValue(value.FromGoString("ping")))))
 	tag := value.NewSymbol(value.FromGoString("tag"))
-	bentoProcess.Get(value.FromGoString("on")).Call(tag, value.NewFunc(func(__a []value.Value) value.Value {
+	value.CallMethod(bentoProcess, value.FromGoString("on"), tag, value.NewFunc(func(__a []value.Value) value.Value {
 		(func() {
 			seen.Push(value.FromGoString("sym"))
 		})()
 		return value.Undefined
 	}))
-	bentoProcess.Get(value.FromGoString("emit")).Call(tag)
+	value.CallMethod(bentoProcess, value.FromGoString("emit"), tag)
 	value.ConsoleLog(seen.Join(value.FromGoString("|"), func(x value.BStr) value.BStr {
 		return x
 	}))

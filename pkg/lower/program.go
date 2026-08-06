@@ -149,6 +149,11 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	// static receiver in the other records a boxed loop variable the loop then emits a
 	// bento string into.
 	r.collectMemberReceivers(append([]frontend.Node{entry}, deps...))
+	// Which top-level functions the program treats as ES5 constructors is read from the
+	// same trees, and for the same reason it has to be in hand before the boxed pass:
+	// such a function is a runtime value everywhere, so a pass that read it as a Go func
+	// would record a slot the lowering then fills with a box.
+	r.collectCtorFuncs(append([]frontend.Node{entry}, deps...))
 	// A declared signature a call site hands a box to takes a boxed slot, and a declared
 	// function whose every return is a box answers one. Both are decisions about a
 	// function made from outside its own body, so they settle here, before any signature
@@ -229,6 +234,10 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	// package-level pointer var below and constructed at the top of main, so it is
 	// collected here rather than emitted as a bare Go func.
 	var callableFuncs []frontend.Node
+	// ctorFuncs holds the top-level named function declarations the program uses as ES5
+	// constructors. Like the callable objects each is a package-level var constructed at
+	// the top of main, so it is collected here rather than emitted as a bare Go func.
+	var ctorFuncs []frontend.Node
 	pushStmt := func(n frontend.Node) {
 		mainBody = append(mainBody, n)
 		mainItems = append(mainItems, mainItem{node: n})
@@ -258,6 +267,23 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 			// and a top-of-main construction, so it is registered and collected here
 			// rather than emitted through funcDecls, which would emit a `func Foo` that
 			// collides with the `type Foo` the callable-object model interns.
+			// A function declaration the program uses as an ES5 constructor lowers to a
+			// value.Value package var holding the runtime constructor, for the same reason
+			// the callable object does: what the name binds is one runtime object, and a
+			// `func Foo` would have no .prototype to write onto and nothing new can build.
+			// It is asked first because a constructor function is a callable object too
+			// once a program writes onto its prototype, and the interned struct that model
+			// builds has a Prototype field rather than a prototype chain, which is the one
+			// thing a Go shape cannot stand in for.
+			if r.ctorFuncDecl(stmt) {
+				decl, err := r.registerCtorFunc(stmt)
+				if err != nil {
+					return Program{}, err
+				}
+				moduleVars = append(moduleVars, decl)
+				ctorFuncs = append(ctorFuncs, stmt)
+				continue
+			}
 			if r.isCallableObject(r.prog.TypeAt(stmt)) {
 				decl, err := r.registerCallableFuncDecl(stmt)
 				if err != nil {
@@ -421,6 +447,16 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 			return Program{}, err
 		}
 		stmts = append(ctorStmts, stmts...)
+	}
+	// A constructor function hoists the same way, and its prototype object has to exist
+	// before the first `F.prototype.m = ...` runs, so its construction is prepended
+	// outermost too.
+	if len(ctorFuncs) > 0 {
+		mk, err := r.buildCtorFuncCtors(ctorFuncs)
+		if err != nil {
+			return Program{}, err
+		}
+		stmts = append(mk, stmts...)
 	}
 	stmts = r.hoistStrBuilders(stmts)
 

@@ -946,6 +946,13 @@ func (r *Renderer) functionMethodCall(recvNode frontend.Node, method string, arg
 	if method != "call" && method != "apply" {
 		return nil, false, nil
 	}
+	// A constructor function does have a receiver slot, so F.call(obj, ...) runs its
+	// body over obj rather than dropping the argument. That is constructor chaining,
+	// how ES5 code calls a base constructor from a derived one, and it is claimed
+	// before the receiver-free reasoning below, which does not hold for it.
+	if r.ctorValueRef(recvNode) {
+		return r.ctorFuncMethodCall(recvNode, method, argNodes)
+	}
 	name, sig, ok, err := r.functionMethodTarget(recvNode, method)
 	if !ok || err != nil {
 		return nil, false, err
@@ -1611,6 +1618,57 @@ func (r *Renderer) dynamicCall(calleeNode frontend.Node, argNodes []frontend.Nod
 	if err != nil {
 		return nil, err
 	}
+	args, err := r.dynamicCallArgs(argNodes)
+	if err != nil {
+		return nil, err
+	}
+	// A method call o.m(...) binds o as the callee's `this`, so a callee that lowered to
+	// a plain keyed read goes out as the one operation the runtime threads the receiver
+	// through rather than a read whose result is then called with nothing bound. Every
+	// callee with no receiver slot runs exactly as it did, so this only changes what a
+	// method value sees (ctorfunc.go).
+	if recv, key, ok := dynamicKeyedRead(callee); ok {
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "CallMethod"), Args: append([]ast.Expr{recv, key}, args...)}, nil
+	}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: callee, Sel: ident("Call")}, Args: args}, nil
+}
+
+// dynamicKeyedRead splits a lowered callee back into the receiver and the key it read,
+// when what it lowered to is exactly the runtime property read a dynamic o.m emits:
+// recv.Get(value.FromGoString("m")). The question is asked of the emitted form rather
+// than of the source node so every decision the member path already made, a hosted
+// global, a well-known symbol, an unboxing narrowing, keeps the callee it produced and
+// stays off this path. Matching the key's own shape is what keeps the receiver known to
+// be a value.Value and the key a value.BStr, the two types CallMethod takes; a computed
+// o[k]() carries a key of another type and stays on the read-then-call path.
+func dynamicKeyedRead(callee ast.Expr) (ast.Expr, ast.Expr, bool) {
+	call, ok := callee.(*ast.CallExpr)
+	if !ok || len(call.Args) != 1 {
+		return nil, nil, false
+	}
+	get, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || get.Sel == nil || get.Sel.Name != "Get" {
+		return nil, nil, false
+	}
+	key, ok := call.Args[0].(*ast.CallExpr)
+	if !ok {
+		return nil, nil, false
+	}
+	fn, ok := key.Fun.(*ast.SelectorExpr)
+	if !ok || fn.Sel == nil || fn.Sel.Name != "FromGoString" {
+		return nil, nil, false
+	}
+	pkg, ok := fn.X.(*ast.Ident)
+	if !ok || pkg.Name != "value" {
+		return nil, nil, false
+	}
+	return get.X, key, true
+}
+
+// dynamicCallArgs boxes the arguments of a dynamic call, which every callee at that
+// boundary reads out of a value slice whatever its static shape was.
+func (r *Renderer) dynamicCallArgs(argNodes []frontend.Node) ([]ast.Expr, error) {
 	args := make([]ast.Expr, 0, len(argNodes))
 	for _, a := range argNodes {
 		if a.Kind() == frontend.NodeSpreadElement {
@@ -1622,7 +1680,7 @@ func (r *Renderer) dynamicCall(calleeNode frontend.Node, argNodes []frontend.Nod
 		}
 		args = append(args, boxed)
 	}
-	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: callee, Sel: ident("Call")}, Args: args}, nil
+	return args, nil
 }
 
 // functionValueCallee lowers a callee expression that is not a named function to

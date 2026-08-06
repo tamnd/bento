@@ -432,6 +432,18 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.hostedGlobalValueRef(n) {
 		return true
 	}
+	// A function the program uses as an ES5 constructor is a runtime constructor value,
+	// not a Go func, and everything about it is dynamic: the name reads as a box, new
+	// of it answers a boxed instance, and this inside its body is the object
+	// [[Construct]] made. The checker sees a function type, an inferred instance shape
+	// and an inferred this, none of which has a Go declaration behind it here, so the
+	// three route to the boxed paths by shape; see ctorfunc.go.
+	if r.ctorFuncRef(n) || r.ctorFuncNew(n) {
+		return true
+	}
+	if n.Kind() == frontend.NodeThisKeyword && r.ctorThisName != "" {
+		return true
+	}
 	// A read of a caught error's .message or .name lowers to a bento string
 	// (member.go), so it is not a boxed value even though the checker types the
 	// catch binding any or unknown; keeping it off the dynamic path routes a +
@@ -1075,6 +1087,18 @@ func (r *Renderer) boxOperand(n frontend.Node) (ast.Expr, error) {
 		return nil, err
 	} else if ok {
 		return boxed, nil
+	}
+	// A function expression whose body reads `this` boxes as a method value, which has a
+	// receiver slot the call site fills, rather than as the receiver-free callable the
+	// ordinary box builds. It routes before lowerExpr because the receiver has to be a
+	// parameter of the closure the body lowers into, which is a different closure from
+	// the one the static path would build (ctorfunc.go).
+	if r.methodFuncBox(n) {
+		if boxed, ok, err := r.methodFuncValue(n); err != nil {
+			return nil, err
+		} else if ok {
+			return boxed, nil
+		}
 	}
 	// A callback boxed into a dynamic call (an addEventListener listener) has its
 	// parameters typed by the slot's static signature. A parameter whose type bento

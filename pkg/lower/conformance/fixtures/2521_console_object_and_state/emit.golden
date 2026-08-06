@@ -39,7 +39,7 @@ func main() {
 	value.ConsoleGroupEnd()
 	value.ConsoleDir(value.NewObject().Set(value.FromGoString("a"), value.Number(1)).Set(value.FromGoString("b"), value.StringValue(value.FromGoString("x"))))
 	var c value.Value = bentoConsole
-	c.Get(value.FromGoString("log")).Call(value.StringValue(value.FromGoString("through the alias")))
-	c.Get(value.FromGoString("count")).Call()
+	value.CallMethod(c, value.FromGoString("log"), value.StringValue(value.FromGoString("through the alias")))
+	value.CallMethod(c, value.FromGoString("count"))
 	value.ConsoleLog(value.ConsoleFormat(value.StringValue(bentoConsole.TypeOf()), value.Bool(value.StrictEquals(bentoConsole, bentoConsole))))
 }

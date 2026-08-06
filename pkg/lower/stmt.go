@@ -139,6 +139,12 @@ func (r *Renderer) lowerStatementMulti(n frontend.Node) ([]ast.Stmt, error) {
 	// bound to the Go local here, at its textual position; an unregistered one reports
 	// ok false and falls to the statement-kind handback below.
 	if n.Kind() == frontend.NodeFunctionDeclaration {
+		// A declaration the program uses as an ES5 constructor binds a value.Value holding
+		// the runtime constructor rather than a Go closure, so it routes ahead of the
+		// nested-function path, which has no plan registered for it (ctorfunc.go).
+		if r.ctorFuncDecl(n) {
+			return r.lowerLocalCtorFunc(n)
+		}
 		if stmts, ok, err := r.lowerNestedFuncDecl(n); err != nil {
 			return nil, err
 		} else if ok {

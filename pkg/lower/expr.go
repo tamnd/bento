@@ -106,6 +106,17 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		// never took, and no such func exists. An ambient global (String, Symbol,
 		// Number) is itself a callable object but is not a user binding and has no
 		// package var, so it is excluded and keeps its own routing below.
+		// A function declaration the program uses as an ES5 constructor lowers to a
+		// value.Value package var, not a Go func: what the name holds is the runtime
+		// constructor value every reference, call, new and .prototype write reaches
+		// through. It is asked before the callable-object test below because a program
+		// that writes onto a prototype makes the function a callable object too, and the
+		// declaration site routes the same way; see ctorfunc.go.
+		if r.ctorFuncRef(n) {
+			if name, ok := localName(r.prog.Text(n)); ok {
+				return ident(name), nil
+			}
+		}
 		if !r.isAmbientGlobal(n) && r.isCallableObject(r.prog.TypeAt(n)) {
 			if name, ok := localName(r.prog.Text(n)); ok {
 				return ident(name), nil
@@ -1433,6 +1444,14 @@ func (r *Renderer) combineBinary(node frontend.Node, opText string, left, right 
 		}
 		if handled {
 			return expr, nil
+		}
+		// v instanceof F where F is a constructor function is the ordinary chain walk:
+		// the runtime looks up F.prototype and climbs v's prototype chain for it. The
+		// left side boxes, since instanceof answers false for a primitive rather than
+		// coercing it, and the whole test is the guard `if (!(this instanceof F))` the
+		// constructor idiom opens with; see ctorfunc.go.
+		if r.ctorValueRef(right) {
+			return r.ctorFuncInstanceof(left, right)
 		}
 		return nil, &NotYetLowerable{Reason: "instanceof outside a caught built-in error is a later slice"}
 	}
