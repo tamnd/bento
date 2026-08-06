@@ -2180,10 +2180,13 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	// receiver as a later slice. compareArray in the test262 prelude calls
 	// message.toString() where a typeof guard narrowed the any-typed message to
 	// symbol, so the binding is still a box the checker no longer types dynamic.
-	if r.isBoxedValue(recvNode) && method == "toString" {
-		if len(argNodes) != 0 {
-			return nil, &NotYetLowerable{Reason: "dynamic .toString with an argument is a later slice"}
-		}
+	// An argument list is not claimed here: ToStringMethod is the no-argument
+	// Object.prototype.toString dispatch and has nowhere to put one. A toString that
+	// takes arguments is a real member on the receiver's own prototype, buf.toString(enc,
+	// start, end) and n.toString(radix) being the two a Node program writes, so the call
+	// falls through to the generic dynamic path below, which reads the member off the
+	// receiver and invokes it with what the call passed.
+	if r.isBoxedValue(recvNode) && method == "toString" && len(argNodes) == 0 {
 		recv, err := r.lowerExpr(recvNode)
 		if err != nil {
 			return nil, err
@@ -2210,10 +2213,10 @@ func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (a
 	// The result stays boxed: a boxed receiver is typed any (valueOf is any) or symbol
 	// (valueOf is symbol), both of which the consumer takes as a value.Value, so unlike
 	// the toString case there is no known primitive kind to unbox to.
-	if r.isBoxedValue(recvNode) && method == "valueOf" {
-		if len(argNodes) != 0 {
-			return nil, &NotYetLowerable{Reason: "dynamic .valueOf with an argument is a later slice"}
-		}
+	// As with toString, an argument list falls through to the generic dynamic path rather
+	// than refusing: ValueOfMethod is the no-argument dispatch, and a valueOf that takes
+	// one is an ordinary member read and call.
+	if r.isBoxedValue(recvNode) && method == "valueOf" && len(argNodes) == 0 {
 		recv, err := r.lowerExpr(recvNode)
 		if err != nil {
 			return nil, err

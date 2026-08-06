@@ -41,6 +41,17 @@ func lowerableRec(p *frontend.Program, t frontend.Type, visited map[int]bool) bo
 		return true
 	}
 
+	// The `object` keyword renders, as the dynamic value.Value box the empty object
+	// type { } already takes (lower.go isObjectTopType). It names no shape, so it does
+	// not reach the property walk below, and it carries its own flag rather than
+	// TypeObject, so it would fall off the end and read as unrendered without this.
+	// It is not grouped with any and unknown: those are unlowerable here because a
+	// declared any is the partitioner's soft blocker, while `object` is a real type
+	// that excludes every primitive and lowers to one Go type.
+	if f&frontend.TypeNonPrimitive != 0 {
+		return true
+	}
+
 	// Break cycles: a recursive object type (a node whose field points back at
 	// its own type) would otherwise recurse forever. Identity is stable within
 	// this one program traversal.

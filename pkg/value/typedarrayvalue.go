@@ -70,10 +70,16 @@ func (a *TypedArray[T]) ToValue() Value {
 	return objectValue(a.boxed)
 }
 
-// ToValue is the Uint8Array half of the same crossing.
+// ToValue is the Uint8Array half of the same crossing. A Node Buffer gets one thing a
+// plain Uint8Array does not: its box is linked to Buffer.prototype, so `b instanceof
+// Buffer` walks the chain and answers true. The link changes no read, because every
+// member lookup consults the typed-array surface before it climbs the chain.
 func (a *Uint8Array) ToValue() Value {
 	if a.boxed == nil {
 		a.boxed = &Object{kind: KindObject, jsTyped: a}
+		if a.nodeBuffer {
+			a.boxed.proto = bufferPrototype().object()
+		}
 	}
 	return objectValue(a.boxed)
 }
@@ -102,7 +108,15 @@ func (a *TypedArray[T]) jsTypedViewOf(buf *ArrayBuffer, byteOffset, length int) 
 	return newTypedArrayView(buf, byteOffset, length, a.coerce)
 }
 
-func (a *Uint8Array) jsTypedName() string         { return "Uint8Array" }
+// jsTypedName does not read the Buffer brand, because a Buffer is a Uint8Array and node
+// says so: Object.prototype.toString.call(buf) is "[object Uint8Array]" and the
+// Symbol.toStringTag read off one answers "Uint8Array", since the tag comes from the
+// typed-array prototype's getter and Buffer.prototype adds no tag of its own. What does
+// say Buffer is buf.constructor.name, and that arrives the honest way, off the
+// Buffer.prototype the box is linked to. The rendering is handled apart from both, in
+// nodeinspect.go, because <Buffer 61 62 63> is not the family's shape at all.
+func (a *Uint8Array) jsTypedName() string { return "Uint8Array" }
+
 func (a *Uint8Array) jsTypedLen() int             { return a.liveLen() }
 func (a *Uint8Array) jsTypedAt(i int) Value       { return Number(float64(a.live()[i])) }
 func (a *Uint8Array) jsTypedSet(i int, v Value)   { a.live()[i] = toUint8(ToNumber(v)) }
@@ -111,8 +125,11 @@ func (a *Uint8Array) jsTypedByteOffset() int      { return a.byteOffset }
 func (a *Uint8Array) jsTypedElemBytes() int       { return 1 }
 func (a *Uint8Array) jsTypedBox() Value           { return a.ToValue() }
 
+// jsTypedViewOf carries the Buffer brand into the new view, which is what makes
+// slice, subarray, map and filter over a Buffer answer a Buffer rather than dropping
+// back to a plain Uint8Array halfway through a chain.
 func (a *Uint8Array) jsTypedViewOf(buf *ArrayBuffer, byteOffset, length int) typedArrayBacking {
-	return &Uint8Array{buffer: buf, byteOffset: byteOffset, length: length}
+	return &Uint8Array{buffer: buf, byteOffset: byteOffset, length: length, nodeBuffer: a.nodeBuffer}
 }
 
 func (a *BigIntArray[T]) jsTypedName() string         { return bigIntArrayKindName[T]() }
@@ -241,6 +258,15 @@ func typedArrayGet(a typedArrayBacking, name string) (Value, bool) {
 		return a.jsTypedBuffer().ToValue(), true
 	case "BYTES_PER_ELEMENT":
 		return Number(float64(a.jsTypedElemBytes())), true
+	}
+	// A Node Buffer's own table is consulted before the family's, because half of it
+	// overrides a member the family already has: toString takes an encoding rather than
+	// joining with commas, fill takes an encoding too, and indexOf searches for a string
+	// or another Buffer rather than for one element.
+	if u, ok := a.(*Uint8Array); ok && u.nodeBuffer {
+		if fn, ok := nodeBufferMethod(u, name); ok {
+			return fn, true
+		}
 	}
 	if fn, ok := typedArrayMethod(a, name); ok {
 		return fn, true

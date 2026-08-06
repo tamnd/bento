@@ -31,14 +31,25 @@ func TestNarrowedReceiverToStringLowers(t *testing.T) {
 	}
 }
 
-// TestDynamicToStringWithArgHandsBack pins that a dynamic .toString() with an
-// argument still hands back: the radix form is a later slice, so lowering it to
-// the no-argument helper would drop the argument.
-func TestDynamicToStringWithArgHandsBack(t *testing.T) {
-	src := `let m: any = 42; let s: any = m.toString(16);`
-	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "argument") {
-		t.Fatalf("dynamic .toString(16) handed back for the wrong reason: %q", reason)
+// TestDynamicToStringWithArgRuns pins the other half: a dynamic .toString() carrying
+// an argument does not go through ToStringMethod, which is the no-argument
+// Object.prototype dispatch and has nowhere to put one. It takes the generic dynamic
+// path instead, reading toString off the receiver and invoking it with what the call
+// passed, so the radix form answers what the receiver's own prototype says. This shape
+// pinned a handback while nothing on a primitive answered such a read.
+func TestDynamicToStringWithArgRuns(t *testing.T) {
+	skipIfShort(t)
+	src := `
+let m: any = 255;
+console.log(m.toString(16));
+console.log(m.toString(2));
+let s: any = "abc";
+console.log(s.toString());
+`
+	got := runProgramGo(t, src)
+	want := "ff\n11111111\nabc\n"
+	if got != want {
+		t.Fatalf("dynamic toString with a radix run mismatch:\n got %q\nwant %q", got, want)
 	}
 }
 
@@ -111,13 +122,21 @@ func TestDynamicValueOfLowers(t *testing.T) {
 	}
 }
 
-// TestDynamicValueOfWithArgHandsBack pins that a dynamic .valueOf() with an argument
-// still hands back rather than silently drop the argument.
-func TestDynamicValueOfWithArgHandsBack(t *testing.T) {
-	src := `let m: any = 42; let v: any = m.valueOf(1);`
-	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "argument") {
-		t.Fatalf("dynamic .valueOf(1) handed back for the wrong reason: %q", reason)
+// TestDynamicValueOfWithArgRuns is the valueOf half of the same rule. ValueOfMethod is
+// the no-argument dispatch, so a call carrying an argument reads valueOf off the
+// receiver and invokes it, and Number.prototype.valueOf ignores what it was passed and
+// answers the number, which is what the language says too.
+func TestDynamicValueOfWithArgRuns(t *testing.T) {
+	skipIfShort(t)
+	src := `
+let m: any = 42;
+console.log(m.valueOf(1));
+console.log((m.valueOf(1) as number) + 8);
+`
+	got := runProgramGo(t, src)
+	want := "42\n50\n"
+	if got != want {
+		t.Fatalf("dynamic valueOf with an argument run mismatch:\n got %q\nwant %q", got, want)
 	}
 }
 

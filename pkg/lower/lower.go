@@ -1092,6 +1092,16 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 		r.requireImport(valuePkg)
 		return sel("value", "Value"), nil
 
+	case t.Flags&frontend.TypeNonPrimitive != 0:
+		// The `object` keyword is the top over everything that is not a primitive.
+		// It names no shape at all, so an array, a function, and a record all sit in
+		// it, and no struct could hold the three. It takes the dynamic value.Value
+		// box for the same reason the empty object type { } does: the value carries
+		// its own kind, a keyed read dispatches on that kind, and a narrow to a real
+		// shape still has the value to narrow.
+		r.requireImport(valuePkg)
+		return sel("value", "Value"), nil
+
 	case t.Flags&frontend.TypeNumber != 0:
 		// number is IEEE-754 double, so float64 (D14, section 3). Integer
 		// refinement to int32/int64 is a later slice and only ever narrows the
@@ -1437,7 +1447,7 @@ func (r *Renderer) typeExpr(t frontend.Type) (ast.Expr, error) {
 			r.requireImport(valuePkg)
 			return sel("value", "Value"), nil
 		}
-		if r.isEmptyObjectTopType(t) {
+		if r.isObjectTopType(t) {
 			// The empty object type { } carries no declared members and no index
 			// signature, so it is not a shape: structurally it is the top type that
 			// accepts any non-null value, and a user type guard narrows it to a shape
@@ -1672,15 +1682,21 @@ func (r *Renderer) isStringIndexDict(t frontend.Type) bool {
 	return ok
 }
 
-// isEmptyObjectTopType reports whether a type is the empty object type { }, an object
-// with no declared members, no string index signature, and no call signature. This is
-// the structural top type that accepts any non-null value, not a fixed shape, so typeExpr
-// lowers it to a dynamic value.Value rather than an empty interned struct. It excludes a
-// string-index dictionary (which isStringIndexDict already routes to value.Value), and it
-// excludes an array, a tuple, and a callable, which have their own lowerings. isDynamic
-// and typeExpr both consult it so the "is a boxed value.Value" decision and the emitted Go
-// type for the slot never disagree.
-func (r *Renderer) isEmptyObjectTopType(t frontend.Type) bool {
+// isObjectTopType reports whether a type is one of the two object tops that name no
+// shape. The first is the empty object type { }, an object with no declared members, no
+// string index signature, and no call signature: the structural top that accepts any
+// non-null value. The second is the `object` keyword, the top over everything that is
+// not a primitive, which the checker spells with its own flag and no members at all.
+// Neither is a fixed shape, so typeExpr lowers both to a dynamic value.Value rather than
+// an empty interned struct. It excludes a string-index dictionary (which
+// isStringIndexDict already routes to value.Value), and it excludes an array, a tuple,
+// and a callable, which have their own lowerings. isDynamic and typeExpr both consult it
+// so the "is a boxed value.Value" decision and the emitted Go type for the slot never
+// disagree.
+func (r *Renderer) isObjectTopType(t frontend.Type) bool {
+	if t.Flags&frontend.TypeNonPrimitive != 0 {
+		return true
+	}
 	if t.Flags&frontend.TypeObject == 0 {
 		return false
 	}
@@ -1716,7 +1732,7 @@ func (r *Renderer) isEmptyObjectTopType(t frontend.Type) bool {
 // box types the { } work introduced. isDynamic consults it on a receiver's declared type
 // so a narrowed member read still dispatches through the box the Go variable holds.
 func (r *Renderer) isNarrowableBoxType(t frontend.Type) bool {
-	if r.isEmptyObjectTopType(t) || r.isStringIndexDict(t) {
+	if r.isObjectTopType(t) || r.isStringIndexDict(t) {
 		return true
 	}
 	if t.Flags&frontend.TypeUnion != 0 {

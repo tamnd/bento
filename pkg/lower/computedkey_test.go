@@ -51,16 +51,17 @@ func TestComputedKeyEmitsSetKeyed(t *testing.T) {
 	}
 }
 
-// An object-typed computed key the renderer cannot box still hands the whole literal
-// back, the guard that admitting 2464 never emits Go that fails to compile. The
-// object-typed key binding renders its type before the computed key does, so the
-// handback now surfaces from the type render (the object type carries no Go shape)
-// rather than the computed-key path; either way the unit hands back and never emits.
-func TestComputedObjectKeyHandsBack(t *testing.T) {
-	src := `const k: object = {}; const o: any = { [k]: 1 }; console.log(1);`
-	reason := renderProgramTolerantHandBack(t, src)
-	if !strings.Contains(reason, "later slice") && !strings.Contains(reason, "no type at this position") {
-		t.Fatalf("object-typed computed key reason = %q, want a handback", reason)
+// An object-typed computed key runs. This test pinned a handback while the `object`
+// keyword had no lowering and its binding could not be rendered at all; it takes the
+// dynamic box now, so the key reaches SetKeyed like every other runtime key and the
+// language's own ToPropertyKey names the slot. A plain object stringifies to
+// "[object Object]", so that is the property the write lands on, which is what the
+// read back proves.
+func TestComputedObjectKeyCoercesToString(t *testing.T) {
+	skipIfShort(t)
+	src := `const k: object = {}; const o: any = { [k]: 1 }; console.log(o["[object Object]"]);`
+	if got := runProgramGoTolerant(t, src); got != "1\n" {
+		t.Fatalf("{ [{}]: 1 }[\"[object Object]\"] = %q, want 1", got)
 	}
 }
 

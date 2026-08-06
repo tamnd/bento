@@ -256,6 +256,16 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		if r.isGlobalRef(n, "console") {
 			return r.consoleRef(), nil
 		}
+		// Buffer is Node's byte-array global. Unlike process and console it has no static
+		// path at all: every use of it is dynamic, from Buffer.allocUnsafe(n) through
+		// buf.toString('utf8', 0, k), so the name lowers straight to the runtime's one
+		// Buffer constructor and the member read and the call dispatch off it. It does not
+		// take the hosted-global route below, whose stated ceiling is a name and its call:
+		// Buffer is used as a receiver more often than it is called, and a hosted global
+		// deliberately excludes a member receiver.
+		if r.isGlobalRef(n, "Buffer") {
+			return r.bufferRef(), nil
+		}
 		// An ambient global read as a value that none of the modeled-global paths
 		// above lower (RegExp, String, Boolean used as an object rather than called)
 		// has no generated Go behind its name, so capitalizing the source name would

@@ -42,6 +42,7 @@ const (
 	TypeIntersection  = adapter.TypeIntersection
 	TypeTypeParameter = adapter.TypeTypeParameter
 	TypeEnum          = adapter.TypeEnum
+	TypeNonPrimitive  = adapter.TypeNonPrimitive
 )
 
 // NodeKind values. The full set lives in the adapter package; these are the

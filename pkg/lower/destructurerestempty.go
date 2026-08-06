@@ -26,7 +26,7 @@ import (
 //
 //	cannot use &ObjEmpty{} (value of type *ObjEmpty) as value.Value value in assignment
 //
-// So the gather asks isEmptyObjectTopType the way typeExpr and isDynamic do, and an empty
+// So the gather asks isObjectTopType the way typeExpr and isDynamic do, and an empty
 // rest builds the same runtime object the empty literal builds. The declaration form and
 // the assignment form share these two, so both answer alike.
 
@@ -35,7 +35,7 @@ import (
 // the classify-time half: interning is what refuses a shape that does not lower, and an
 // empty shape has nothing to intern.
 func (r *Renderer) restGatherStruct(restType frontend.Type) (string, error) {
-	if r.isEmptyObjectTopType(restType) {
+	if r.isObjectTopType(restType) {
 		return "", nil
 	}
 	return r.decls.internStruct(r, restType)

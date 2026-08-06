@@ -67,7 +67,14 @@ func IsBentoAmbientPath(p string) bool { return isAmbientPath(p) }
 // backs them with a package-level module object. require is the CommonJS loader
 // global, typed any so typeof require is "function" and a require(specifier) call
 // lowers through the dynamic call path; the lowerer backs it with a package-level
-// require function value. queueMicrotask is the WHATWG global that schedules a
+// require function value. Buffer is Node's byte-array global, typed any so a static
+// call like Buffer.allocUnsafe(n) and a member read off an instance both lower through
+// the dynamic path; the lowerer backs the name with the runtime's Buffer constructor,
+// the same value require('buffer').Buffer and globalThis.Buffer hand back. It is typed
+// any rather than with a real interface because a Buffer's surface is the whole
+// Uint8Array prototype plus forty of its own members, and declaring a shape that wide
+// only to box every value it produces would buy nothing the dynamic path does not
+// already give. queueMicrotask is the WHATWG global that schedules a
 // callback on the microtask queue; the lowerer boxes the callback and emits
 // value.QueueMicrotask, and the assembled main drains the queue at its end.
 // structuredClone is the WHATWG global that deep-copies a data graph; the lowerer
@@ -119,6 +126,7 @@ declare var __filename: string;
 declare var module: any;
 declare var exports: any;
 declare var require: any;
+declare var Buffer: any;
 declare function queueMicrotask(callback: () => void): void;
 declare function setImmediate(callback: (...args: any[]) => void, ...args: any[]): number;
 declare function clearImmediate(handle: number): void;
