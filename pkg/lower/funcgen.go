@@ -1020,11 +1020,16 @@ func (r *Renderer) scopedBlockRange(block frontend.Node, lo, hi int) (*ast.Block
 // Go fields. Both forms share the shape: one plain identifier per parameter, its
 // type folded into the checker's answer for that identifier, so a bare x in
 // xs.map(x => ...) is typed number without an annotation. A rest element or a
-// binding pattern (whose first child is not a lone identifier), and a default
-// value (an extra child past the annotation), each stay a later slice, named by
-// noun so the reason reads for the form the caller lowered. A named function
-// expression's own name is a NodeIdentifier child, not a NodeParameter, so it is
-// skipped here and ruled out separately by functionExpr.
+// binding pattern (whose first child is not a lone identifier) stays a later
+// slice, named by noun so the reason reads for the form the caller lowered. A
+// named function expression's own name is a NodeIdentifier child, not a
+// NodeParameter, so it is skipped here and ruled out separately by functionExpr.
+//
+// A default value (an extra child past the annotation) lowers when the parameter's
+// Go slot is a value.Value, which can hold the undefined an omitted argument binds:
+// the field is built as if the default were not there and the fill happens at body
+// entry. A static slot has no undefined to test, so it keeps the handback unless
+// the call site was proved able to fill it.
 func (r *Renderer) closureParamFields(n frontend.Node, sig frontend.Signature, noun string) ([]*ast.Field, error) {
 	kids := r.prog.Children(n)
 	fields := make([]*ast.Field, 0, len(kids))
@@ -1062,23 +1067,38 @@ func (r *Renderer) closureParamFields(n frontend.Node, sig frontend.Signature, n
 			pi++
 			continue
 		}
+		var paramDefault frontend.Node
 		for _, extra := range pkids[1:] {
 			if extra.Kind() != frontend.NodeUnknown {
-				// An escape-safe const-bound arrow lowers its defaulted parameter as a plain
-				// Go field with no default: collectArrowDefaults proved every call to the
-				// binding is a direct call, so buildCall reconstructs the default at each
-				// omitting call site the same way a top-level function's default is filled.
-				// Every other closure default stays a later slice, since a func value passed
-				// as a callback cannot fill a default it never carried.
-				if r.arrowDropDefaults[n] {
-					break
-				}
+				paramDefault = extra
+				break
+			}
+		}
+		if paramDefault != nil {
+			// An escape-safe const-bound arrow lowers its defaulted parameter as a plain
+			// Go field with no default: collectArrowDefaults proved every call to the
+			// binding is a direct call, so buildCall reconstructs the default at each
+			// omitting call site the same way a top-level function's default is filled.
+			if r.arrowDropDefaults[n] {
+				paramDefault = nil
+			} else if !r.dynamicDefaultSlot(pkids[0]) {
+				// A defaulted parameter whose Go slot is a static type has nowhere to hold
+				// the undefined an omitted argument binds, so it cannot fill its own
+				// default and needs a call site that knows to fill it. A func value passed
+				// as a callback has no such call site, so this stays a later slice.
 				return nil, &NotYetLowerable{Reason: noun + " parameter with a default value is a later slice"}
 			}
 		}
 		name, ok := localName(r.prog.Text(pkids[0]))
 		if !ok {
 			return nil, &NotYetLowerable{Reason: noun + " parameter is not a Go identifier"}
+		}
+		// A dynamic slot holds undefined, so the default is filled at body entry by
+		// paramDestructureBindings and nothing rides on the call site. The record is made
+		// here, where the field the fill assigns to is built, so the two cannot disagree
+		// about which parameters carry one.
+		if paramDefault != nil {
+			r.paramBodyDefaults[k] = paramDefault
 		}
 		// A parameter boxOperand forced dynamic (a listener's e: Event, whose static
 		// type bento cannot spell) takes a value.Value field, the box the dynamic call
@@ -1132,6 +1152,21 @@ func (r *Renderer) closureHasDestructuredParam(n frontend.Node) bool {
 	return false
 }
 
+// dynamicDefaultSlot reports whether a parameter name node's Go field is a
+// value.Value, the one slot that can hold the undefined an omitted argument binds
+// and so the one a parameter can fill its own default from. It reads the same two
+// facts closureParamFields reads to build the field: the boxed-callback forcing set,
+// and the checker's any-or-unknown answer for the name. Those are the same flags
+// buildCall tests to fill an omitted dynamic argument with value.Undefined and
+// boxFuncToDynamic tests to hand the boxed argument straight through, so all three
+// agree on which parameters carry a box.
+func (r *Renderer) dynamicDefaultSlot(name frontend.Node) bool {
+	if r.forceDynParams[name] {
+		return true
+	}
+	return r.prog.TypeAt(name).Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0
+}
+
 // paramDestructureBindings returns the statements that bind the names an object or
 // array pattern parameter destructured, read from the synthesized Go field the
 // pattern lowered to. Go has no destructuring parameter, so the whole object or
@@ -1147,7 +1182,45 @@ func (r *Renderer) paramDestructureBindings(paramNodes []frontend.Node, sig fron
 			break
 		}
 		pkids := r.prog.Children(pn)
-		if len(pkids) == 0 || pkids[0].Kind() == frontend.NodeIdentifier {
+		if len(pkids) == 0 {
+			continue
+		}
+		// A defaulted parameter closureParamFields gave a value.Value slot fills its own
+		// default here, the first thing the body does: the slot holds the undefined an
+		// omitted argument binds, so the fill is the language's own rule spelled straight,
+		// `if p === undefined then p = <default>`. Filling here rather than at the call
+		// site is what lets the function escape, since the boxed wrapper and a direct Go
+		// call both pass undefined for an argument they do not supply and neither has to
+		// know the parameter had a default. It also puts a default that reads an earlier
+		// parameter in the one scope where that parameter is bound.
+		if def, ok := r.paramBodyDefaults[pn]; ok {
+			name, ok := localName(r.prog.Text(pkids[0]))
+			if !ok {
+				return nil, &NotYetLowerable{Reason: "a defaulted parameter name is not a Go identifier"}
+			}
+			// The slot is a value.Value, so the default lands in it boxed. Where the
+			// checker already types the parameter any the signature says so too and
+			// lowerArgAt boxes on its own; where the box rewrite forced the slot dynamic
+			// the signature still names the static type it was, so the default goes
+			// through boxOperand instead and the assignment stays well-typed.
+			var lowered ast.Expr
+			var err error
+			if sig.Params[i].Type.Flags&(frontend.TypeAny|frontend.TypeUnknown) != 0 {
+				lowered, err = r.lowerArgAt(def, sig.Params[i].Type)
+			} else {
+				lowered, err = r.boxOperand(def)
+			}
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, &ast.IfStmt{
+				Cond: &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident(name), Sel: ident("IsUndefined")}},
+				Body: &ast.BlockStmt{List: []ast.Stmt{
+					&ast.AssignStmt{Lhs: []ast.Expr{ident(name)}, Tok: token.ASSIGN, Rhs: []ast.Expr{lowered}},
+				}},
+			})
+		}
+		if pkids[0].Kind() == frontend.NodeIdentifier {
 			continue
 		}
 		pat := pkids[0]
@@ -1911,9 +1984,13 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 	// is the shape: the join dispatches through the runtime and answers a value.Value,
 	// and the func literal's result is spelled by the checker's string, so without the
 	// coercion the return does not build. boxedReturnFns above already claimed every
-	// arrow whose result stays a box, so what reaches here has a Go value to land in.
+	// arrow whose result stays a box, so what reaches here has a Go value to land in. A
+	// sum with a boxed operand is a box the same way, and the checker types it number, so
+	// `(a, b = a + 1) => a + b` over a b the boxed pass gave the value slot reaches here
+	// with a value.Add to bring down.
 	const unboxes = frontend.TypeNumber | frontend.TypeString | frontend.TypeBoolean
-	if bodyType.Flags&unboxes != 0 && bodyType.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 && r.isBoxedChain(body) {
+	if bodyType.Flags&unboxes != 0 && bodyType.Flags&(frontend.TypeAny|frontend.TypeUnknown) == 0 &&
+		(r.isBoxedChain(body) || r.isDynamicValueAdd(body)) {
 		loweredBody, err = r.coerceDynamicToStaticFlags(loweredBody, bodyType.Flags)
 		if err != nil {
 			return nil, err

@@ -36,10 +36,11 @@ console.log(doubled[3]);
 	}
 }
 
-// TestArrowDefaultParamHandsBack keeps the default-value form a later slice: a
-// default makes the parameter optional and needs call-site defaulting the arrow
-// lowering does not do yet, so it routes to the interpreter rather than dropping
-// the default on the floor.
+// TestArrowDefaultParamHandsBack keeps a defaulted callback parameter a later slice. An
+// inline callback's Go func type has to fit the slot the callee declares, here the
+// func(float64) float64 Map takes, so the parameter cannot take the boxed slot a
+// body-entry fill needs, and neither can the call site fill it: Map decides the arity.
+// It routes to the interpreter rather than drop the default on the floor.
 func TestArrowDefaultParamHandsBack(t *testing.T) {
 	handsBack(t, "const nums = [1, 2, 3]; const out = nums.map((n = 5) => n * 2); console.log(out.length);\n")
 }
