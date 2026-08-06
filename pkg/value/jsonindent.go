@@ -87,6 +87,16 @@ func (e jsonIndenter) encode(b *strings.Builder, v any, indent string) {
 		e.encodeBoxed(b, x.jsTypedBox(), indent)
 	case jsonArmer:
 		e.encode(b, x.JSONArm(), indent)
+	case jsonOptional:
+		// The same unwrapping encodeJSON does, and for the same positions: an absent
+		// optional reaching the walk is an array element or a collection value, which
+		// render as null rather than being dropped.
+		inner, present := x.jsonOptField()
+		if !present {
+			b.WriteString("null")
+			return
+		}
+		e.encode(b, inner, indent)
 	default:
 		if jsonUndefinedGo(v) {
 			return

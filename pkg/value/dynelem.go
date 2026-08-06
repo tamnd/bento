@@ -196,3 +196,22 @@ func dynUnboxOrThrow[T any](v Value, what string) T {
 	}
 	return e
 }
+
+// StructToValue boxes one generated struct, the generic form an element boxer has to
+// have. It is ObjectFromStruct with the type parameter spelled, for the same reason
+// ClassToValue is: ObjectFromStruct takes an any, which fits a boxing site that names
+// the value directly, and ArrayValueOf wants a func(T) Value it can apply down a typed
+// slice. The two names say what the emitter proved about the element, a plain fixed
+// shape here and a registered class instance there; the walk underneath is one walk,
+// which is what keeps a class named wherever it is reached.
+func StructToValue[T any](x T) Value {
+	return ObjectFromStruct(x)
+}
+
+// Identity is the element boxer for an element that is already a box, the value.Value
+// an any[] or an array written with no element type at all holds. ArrayValueOf applies
+// a boxer to every element and has no way to skip one, so the array of boxes needs a
+// boxer that hands its argument straight back rather than a special case in the loop.
+// It is spelled here rather than as a closure at each site so an emitted box of a
+// dynamic array reads as the one call the other element types get.
+func Identity(v Value) Value { return v }

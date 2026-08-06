@@ -124,6 +124,10 @@ type unionInfo struct {
 	// renderer emits the ToString method that switches the tag to its arm's JavaScript
 	// string form. It stays false for a union never stringified.
 	needsToString bool
+	// needsToValue records that a value of this union flowed into a dynamic slot, so the
+	// renderer emits the ToValue method that switches the tag to its arm's own box. It
+	// stays false for a union that never crosses the dynamic boundary.
+	needsToValue bool
 }
 
 // armByDisc returns the object arm a discriminant literal selects, so a compare
@@ -1404,6 +1408,16 @@ func (r *Renderer) renderUnions() []ast.Decl {
 		for _, a := range info.arms {
 			out = append(out, unionCtor(info, a))
 		}
+		// A sentinel arm's JSONArm case names value.Null or value.Undefined, and a union
+		// of a primitive with a sentinel (number | null) names nothing else out of the
+		// value package, so the import is asked for here rather than left to whatever
+		// else the program happens to reach.
+		for _, a := range info.arms {
+			if a.tagOnly {
+				r.requireImport(valuePkg)
+				break
+			}
+		}
 		out = append(out, unionJSONArm(info))
 		if info.needsTypeOf {
 			out = append(out, unionTypeOf(info))
@@ -1413,6 +1427,9 @@ func (r *Renderer) renderUnions() []ast.Decl {
 		}
 		if info.needsToString {
 			out = append(out, unionToString(info))
+		}
+		if info.needsToValue {
+			out = append(out, unionToValue(info))
 		}
 	}
 	return out
@@ -1595,6 +1612,105 @@ func unionToString(info *unionInfo) ast.Decl {
 	}
 }
 
+// unionValueBoxed returns the descriptor of a type that is a tagged-sum union whose
+// dynamic box the ToValue method can spell, and marks the union so the renderer emits
+// that method. It is the boxing sibling of unionStringValued: a caller holding a union
+// that has to cross into a dynamic slot asks here, and gets back either the descriptor
+// whose Go name it can hang the method off or false, which keeps it on its handback.
+func (r *Renderer) unionValueBoxed(t frontend.Type) (*unionInfo, bool) {
+	info, ok := r.unionInfoOrIntern(t)
+	if !ok || !unionToValueSupported(info) {
+		return nil, false
+	}
+	info.needsToValue = true
+	return info, true
+}
+
+// unionToValueSupported reports whether every arm of a union has a box unionToValue
+// can spell: a value arm that is a number, string, boolean, or bigint, each of which
+// has a one-call box in the runtime, or a tag-only sentinel, whose box is the null or
+// undefined singleton. An object arm is not supported here. Its box would be
+// ObjectFromStruct over the arm's struct, which is right only when that struct carries
+// no function-typed member, and a union with an object arm hands back earlier anyway
+// for mixing object and non-object members, so there is no shape this would reach that
+// something else does not already refuse.
+func unionToValueSupported(info *unionInfo) bool {
+	for _, a := range info.arms {
+		if a.tagOnly {
+			continue
+		}
+		if _, ok := armValueExpr(a); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// armValueExpr returns the value.Value expression an arm's ToValue case emits, reading
+// the arm field off the receiver u: a number through value.Number, a string through
+// value.StringValue, a boolean through value.Bool, a bigint through value.BigIntFromBig,
+// and a tag-only sentinel as the singleton JavaScript holds for it, value.Null or
+// value.Undefined. It returns ok false for an object arm, which unionToValueSupported
+// reads as the whole union being unboxable.
+func armValueExpr(a unionArm) (ast.Expr, bool) {
+	if a.tagOnly {
+		if a.flag == frontend.TypeNull {
+			return sel("value", "Null"), true
+		}
+		return sel("value", "Undefined"), true
+	}
+	field := &ast.SelectorExpr{X: ident("u"), Sel: ident(a.field)}
+	switch {
+	case a.flag&frontend.TypeNumber != 0:
+		return &ast.CallExpr{Fun: sel("value", "Number"), Args: []ast.Expr{field}}, true
+	case a.flag&frontend.TypeString != 0:
+		return &ast.CallExpr{Fun: sel("value", "StringValue"), Args: []ast.Expr{field}}, true
+	case a.flag&frontend.TypeBoolean != 0:
+		return &ast.CallExpr{Fun: sel("value", "Bool"), Args: []ast.Expr{field}}, true
+	case a.flag&frontend.TypeBigInt != 0:
+		return &ast.CallExpr{Fun: sel("value", "BigIntFromBig"), Args: []ast.Expr{field}}, true
+	}
+	return nil, false
+}
+
+// unionToValue builds the ToValue method a value of this union lowers to when it flows
+// into a dynamic slot: an argument to a required module's function, an element of an
+// array being boxed, a member of a boxed collection. A tagged sum's fields are
+// unexported and only the tag says which one is live, so the box has to be a switch,
+// and each case is the arm's own box, the same call the scalar boxing path emits for a
+// value of that type standing alone. Every arm carries a case, sentinels included,
+// since each has a definite box; the trailing return is unreachable and returns
+// undefined, the box for a tag no constructor sets.
+//
+// It has the func(T) value.Value shape an element boxer needs once it is named as a
+// method expression, which is what lets an array of unions box with no closure emitted,
+// the same way an array of class instances does through value.ClassToValue.
+func unionToValue(info *unionInfo) ast.Decl {
+	cases := make([]ast.Stmt, 0, len(info.arms))
+	for _, a := range info.arms {
+		expr, _ := armValueExpr(a)
+		cases = append(cases, &ast.CaseClause{
+			List: []ast.Expr{ident(info.tagConst(a))},
+			Body: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{expr}}},
+		})
+	}
+	return &ast.FuncDecl{
+		Recv: &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("u")}, Type: ident(info.goName)}}},
+		Name: ident("ToValue"),
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: sel("value", "Value")}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{
+			&ast.SwitchStmt{
+				Tag:  &ast.SelectorExpr{X: ident("u"), Sel: ident("tag")},
+				Body: &ast.BlockStmt{List: cases},
+			},
+			&ast.ReturnStmt{Results: []ast.Expr{sel("value", "Undefined")}},
+		}},
+	}
+}
+
 // unionJSONArm builds the JSONArm method that hands the union's active member to the
 // JSON serializer. A tagged-sum union stores its value in the field its tag selects,
 // and those fields are unexported, so without this hook JSON.stringify would reflect
@@ -1607,10 +1723,19 @@ func unionJSONArm(info *unionInfo) ast.Decl {
 	for _, a := range info.arms {
 		result := ast.Expr(&ast.SelectorExpr{X: ident("u"), Sel: ident(a.field)})
 		if a.tagOnly {
-			// A sentinel arm has no field to hand the serializer; nil renders as JSON
-			// null, which is what a null arm is and the closest the encoder has for an
-			// undefined the serializer would otherwise omit.
-			result = ident("nil")
+			// A sentinel arm has no field to hand the serializer, so it hands over the
+			// singleton instead: value.Null for a null arm, value.Undefined for an
+			// undefined one. A bare nil said neither, and the walk read it as nothing at
+			// all rather than as a value, so an array of unions holding a null wrote
+			// "[0,,1]" and an object field wrote a key with no value after it. The two
+			// singletons are what the boxed side of the walk already knows how to place:
+			// null renders as null everywhere, and undefined folds to null in an array
+			// and omits its key in an object, which is what JSON.stringify does.
+			if a.flag == frontend.TypeNull {
+				result = sel("value", "Null")
+			} else {
+				result = sel("value", "Undefined")
+			}
 		}
 		cases = append(cases, &ast.CaseClause{
 			List: []ast.Expr{ident(info.tagConst(a))},

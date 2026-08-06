@@ -293,6 +293,17 @@ func jsonToValue(v any) Value {
 		return NewArrayValue(out)
 	case jsonArmer:
 		return jsonToValue(x.JSONArm())
+	case jsonOptional:
+		// An optional lifts to its inner value when present and to undefined when not,
+		// rather than to the empty object the reflection walk would make of its two
+		// unexported fields. The field walk unwraps one before it gets here, so this is
+		// the lift meeting an optional in a position with no field to hang it off: an
+		// array element, a collection value, the argument of a replacer call.
+		inner, present := x.jsonOptField()
+		if !present {
+			return Undefined
+		}
+		return jsonToValue(inner)
 	default:
 		if jsonUndefinedGo(v) {
 			return Undefined
