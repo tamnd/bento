@@ -22,6 +22,19 @@ console.log(m?.[1]);`)
 	}
 }
 
+// TestABoxedCallReceiverIndexesThroughTheHelper is the same read with no binding in
+// between, and it is the line the compat suite actually stops on. The receiver is a call
+// the checker types RegExpExecArray | null while the runtime answers one boxed value, so
+// asking the checker's type would find a union with a null in it and look for an
+// optional that is not there. What decides the read is what the call lowers to.
+func TestABoxedCallReceiverIndexesThroughTheHelper(t *testing.T) {
+	got := renderProgram(t, `const line: string = process.argv[2];
+console.log(/H\s*:\s*(.*)/.exec(line)?.[1]);`)
+	if !strings.Contains(got, "value.OptionalIndex(") {
+		t.Errorf("an inline exec receiver did not index through the helper:\n%s", got)
+	}
+}
+
 // TestABoxedReceiverPicksTheHelperByIndexType pins the three key kinds apart. A number
 // is an index, a string is a member name, and anything decided at run time goes through
 // the element lookup that sorts the two out itself.
@@ -139,11 +152,24 @@ console.log(f?.(1));
 	}
 }
 
+// TestAnOptionalMethodCallHandsBackByName is the third form carrying the same token,
+// beside the call and the bracket. Its callee exposes three children, so the method-call
+// path used to say the callee was malformed. The callee is fine; the form is what is not
+// lowered yet.
+func TestAnOptionalMethodCallHandsBackByName(t *testing.T) {
+	reason := renderProgramHandBack(t, `const m: Map<string, number> | undefined = new Map();
+console.log(m?.get("a"));
+`)
+	if !strings.Contains(reason, "an optional method call a?.m() is a later slice") {
+		t.Errorf("hand back said %q, want it to name the optional method call", reason)
+	}
+}
+
 // TestAnOptionalWithNoIndexReadHandsBack keeps the annotated path's limit honest. A
-// computed string key on an annotated optional names no field the emitter can read and
-// no numeric index it can lift, so it stops rather than invent one.
+// typed array behind an optional indexes its own way, which the OptMap path has no read
+// to lift, so it stops rather than emit a call the Go type does not carry.
 func TestAnOptionalWithNoIndexReadHandsBack(t *testing.T) {
-	reason := renderProgramHandBack(t, `export function f(o: { [k: string]: number } | undefined, k: string): number | undefined { return o?.[k]; }
+	reason := renderProgramHandBack(t, `export function f(a: Uint8Array | undefined, i: number): number | undefined { return a?.[i]; }
 `)
 	if !strings.Contains(reason, "later slice") {
 		t.Errorf("hand back said %q, want a later-slice reason", reason)
