@@ -1084,9 +1084,14 @@ func (r *Renderer) closureParamFields(n frontend.Node, sig frontend.Signature, n
 			} else if !r.dynamicDefaultSlot(pkids[0]) {
 				// A defaulted parameter whose Go slot is a static type has nowhere to hold
 				// the undefined an omitted argument binds, so it cannot fill its own
-				// default and needs a call site that knows to fill it. A func value passed
-				// as a callback has no such call site, so this stays a later slice.
-				return nil, &NotYetLowerable{Reason: noun + " parameter with a default value is a later slice"}
+				// default and needs a call site that knows to fill it. A boxed object
+				// method has exactly one, the value.NewFunc wrapper around it, which fills
+				// the default through value.ArgOr. A func value passed as a callback has no
+				// such call site, so that case stays a later slice.
+				if !r.boxWrapperDefaults[n] {
+					return nil, &NotYetLowerable{Reason: noun + " parameter with a default value is a later slice"}
+				}
+				paramDefault = nil
 			}
 		}
 		name, ok := localName(r.prog.Text(pkids[0]))

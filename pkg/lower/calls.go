@@ -1501,6 +1501,17 @@ func (r *Renderer) dynamicDestructureArg(a frontend.Node, p frontend.Param) (ast
 // emit Go that does not compile. Every other argument lowers at its own type and
 // bridges to the parameter the ordinary way.
 func (r *Renderer) lowerArgAt(a frontend.Node, pt frontend.Type) (ast.Expr, error) {
+	// An object literal handed to an any parameter is built over the value model, member
+	// by member, and the static struct the typed path would build is thrown away:
+	// bridgeArg's boxStaticToDynamic reroutes to the same boxObjectLiteral this calls.
+	// Going there first is not an optimization but a correctness point. The static build
+	// can refuse a member the boxed build lowers fine, a method with a defaulted
+	// parameter being one, and a refusal from a struct nobody was going to keep would
+	// have sunk the whole call. An array literal keeps the ordinary route, since the
+	// contextual array cases in bridgeArg claim some of those before the box.
+	if a.Kind() == frontend.NodeObjectLiteralExpression && r.isDynamicType(pt) {
+		return r.boxObjectLiteral(a)
+	}
 	if a.Kind() == frontend.NodeObjectLiteralExpression && !r.isNarrowableBoxType(pt) {
 		// An object literal argument to a string-index dictionary parameter boxes into a
 		// value.Value bag rather than building at a fixed shape, so it skips the

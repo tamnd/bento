@@ -501,6 +501,14 @@ type Renderer struct {
 	// explicit-undefined trailing argument at the call site, exactly as calleeDefaults
 	// serves a top-level function. It is filled alongside arrowDropDefaults.
 	arrowCallDefaults map[frontend.Symbol][]frontend.Node
+	// boxWrapperDefaults marks an object-literal method whose defaulted parameters lower
+	// as plain Go fields with no default, because the value.NewFunc wrapper boxing the
+	// method is its only call site and reconstructs the default there. It is the same
+	// bargain arrowDropDefaults strikes, with the wrapper standing in for the direct call
+	// site an arrow's binding has. boxMethodClosure fills it just before it builds the
+	// method's fields, so the field and the wrapper cannot disagree about which
+	// parameters carry one.
+	boxWrapperDefaults map[frontend.Node]bool
 	// paramBodyDefaults maps a closure parameter node whose default the callee fills in
 	// its own body to that default's expression. It is the answer for a defaulted
 	// parameter whose Go slot is a value.Value, which can hold the undefined an omitted
@@ -945,7 +953,7 @@ const maxTypeNodes = 20000
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
-	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, nodeNamespaces: map[string]string{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, internalNamespaces: map[string]bool{}, dynImportNamespaces: map[string]bool{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, argsThreads: map[frontend.Symbol]bool{}, paramAliases: map[frontend.Symbol]string{}, arrowDropDefaults: map[frontend.Node]bool{}, arrowCallDefaults: map[frontend.Symbol][]frontend.Node{}, paramBodyDefaults: map[frontend.Node]frontend.Node{}, closurePadParams: map[frontend.Node][]frontend.Param{}, promiseSettleParams: map[string]promiseSettle{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, monoMethodSpecs: map[frontend.Node][]monoSpec{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}, seenAssign: map[frontend.Span]bool{}}
+	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, nodeNamespaces: map[string]string{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, internalNamespaces: map[string]bool{}, dynImportNamespaces: map[string]bool{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, argsThreads: map[frontend.Symbol]bool{}, paramAliases: map[frontend.Symbol]string{}, arrowDropDefaults: map[frontend.Node]bool{}, boxWrapperDefaults: map[frontend.Node]bool{}, arrowCallDefaults: map[frontend.Symbol][]frontend.Node{}, paramBodyDefaults: map[frontend.Node]frontend.Node{}, closurePadParams: map[frontend.Node][]frontend.Param{}, promiseSettleParams: map[string]promiseSettle{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, monoMethodSpecs: map[frontend.Node][]monoSpec{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}, seenAssign: map[frontend.Span]bool{}}
 }
 
 // freshTemp returns a generated Go local name unique across the program, for a

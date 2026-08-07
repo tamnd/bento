@@ -534,6 +534,15 @@ func (v Value) Get(key BStr) Value {
 			}
 			return StringValue(ch)
 		}
+		// A string's prototype methods are reachable on the dynamic path too, so
+		// s.toUpperCase() and s.split(",") work off a receiver the checker typed any,
+		// the shape a boxed object method's parameter and most of what a Node API
+		// hands back both take. The statically typed receiver never gets here: calls.go
+		// lowers those to the same value.BStr methods this delegates to
+		// (stringmember.go).
+		if val, ok := stringGet(s, name); ok {
+			return val
+		}
 		return Undefined
 	case KindArray:
 		o := v.object()
