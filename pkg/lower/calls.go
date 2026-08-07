@@ -436,7 +436,7 @@ func (r *Renderer) finishCall(n frontend.Node, callee ast.Expr, argNodes []front
 		params = sig.Params
 		rest = sig.RestParam
 	}
-	return r.buildCall(callee, argNodes, params, rest, defaults, variadicTail, calleeReadsArgs, calleeThreadsArgs)
+	return r.buildCall(callee, nil, argNodes, params, rest, defaults, variadicTail, calleeReadsArgs, calleeThreadsArgs)
 }
 
 // buildFixedTupleSpreadCall lowers a call whose argument list contains a spread of a
@@ -737,7 +737,7 @@ func (r *Renderer) assignedFuncExpr(sym frontend.Symbol) (frontend.Node, bool) {
 // comes from the receiver's property type (an assert.sameValue(...) on a callable
 // object) shares the exact same argument bridging without a call node to look the
 // signature up from.
-func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params []frontend.Param, rest *frontend.Param, defaults []frontend.Node, variadicTail bool, calleeReadsArgs bool, calleeThreadsArgs bool) (ast.Expr, error) {
+func (r *Renderer) buildCall(callee ast.Expr, leading []ast.Expr, argNodes []frontend.Node, params []frontend.Param, rest *frontend.Param, defaults []frontend.Node, variadicTail bool, calleeReadsArgs bool, calleeThreadsArgs bool) (ast.Expr, error) {
 	// A threaded callee takes the real call-site arguments through a hidden trailing
 	// parameter, so the declared parameters still bind by position (extras dropped,
 	// omissions filled) exactly as below while the actual argument list rides the hidden
@@ -768,12 +768,18 @@ func (r *Renderer) buildCall(callee ast.Expr, argNodes []frontend.Node, params [
 	// loop cannot lower. It routes only when there is no rest parameter and the
 	// expansion lands exactly on the fixed parameters; every other spread shape leaves
 	// handled false and falls through to the honest handback below.
-	if rest == nil {
+	if rest == nil && len(leading) == 0 {
 		if expr, handled, err := r.buildFixedTupleSpreadCall(callee, argNodes, params, defaults, variadicTail); handled || err != nil {
 			return expr, err
 		}
 	}
-	args := make([]ast.Expr, 0, len(params)+1)
+	// A leading argument is one the call site already lowered and that no source node
+	// stands for, the template strings object a tagged template passes its tag being
+	// the only one so far. It rides in front, and the parameters it consumed were
+	// dropped from params by the caller, so the loop below still binds argNodes[i] to
+	// params[i].
+	args := make([]ast.Expr, 0, len(leading)+len(params)+1)
+	args = append(args, leading...)
 	// The arguments that land on a fixed parameter lower and bridge in position; any
 	// beyond the fixed count belong to a rest parameter and are gathered below.
 	nFixed := len(argNodes)
@@ -979,7 +985,7 @@ func (r *Renderer) functionMethodCall(recvNode frontend.Node, method string, arg
 	if err != nil {
 		return nil, false, err
 	}
-	e, err := r.buildCall(ident(name), callArgs, sig.Params, nil, nil, false, false, false)
+	e, err := r.buildCall(ident(name), nil, callArgs, sig.Params, nil, nil, false, false, false)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1628,7 +1634,7 @@ func (r *Renderer) objectMethodCall(recvNode frontend.Node, method string, argNo
 	// passes has to box the same way. The property's own signature still names the static
 	// type, so it is rewritten here from the same marks the field's type was.
 	sig := r.boxedTypeSig(sp.Type, call[0])
-	e, err := r.buildCall(callee, argNodes, sig.Params, sig.RestParam, nil, false, false, false)
+	e, err := r.buildCall(callee, nil, argNodes, sig.Params, sig.RestParam, nil, false, false, false)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1650,16 +1656,21 @@ func (r *Renderer) dynamicCall(calleeNode frontend.Node, argNodes []frontend.Nod
 	if err != nil {
 		return nil, err
 	}
-	// A method call o.m(...) binds o as the callee's `this`, so a callee that lowered to
-	// a plain keyed read goes out as the one operation the runtime threads the receiver
-	// through rather than a read whose result is then called with nothing bound. Every
-	// callee with no receiver slot runs exactly as it did, so this only changes what a
-	// method value sees (ctorfunc.go).
+	return r.dynamicCallOn(callee, args), nil
+}
+
+// dynamicCallOn builds the runtime call on an already-lowered callee and an
+// already-boxed argument list. A method call o.m(...) binds o as the callee's `this`,
+// so a callee that lowered to a plain keyed read goes out as the one operation the
+// runtime threads the receiver through rather than a read whose result is then called
+// with nothing bound. Every callee with no receiver slot runs exactly as it did, so
+// this only changes what a method value sees (ctorfunc.go).
+func (r *Renderer) dynamicCallOn(callee ast.Expr, args []ast.Expr) ast.Expr {
 	if recv, key, ok := dynamicKeyedRead(callee); ok {
 		r.requireImport(valuePkg)
-		return &ast.CallExpr{Fun: sel("value", "CallMethod"), Args: append([]ast.Expr{recv, key}, args...)}, nil
+		return &ast.CallExpr{Fun: sel("value", "CallMethod"), Args: append([]ast.Expr{recv, key}, args...)}
 	}
-	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: callee, Sel: ident("Call")}, Args: args}, nil
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: callee, Sel: ident("Call")}, Args: args}
 }
 
 // dynamicKeyedRead splits a lowered callee back into the receiver and the key it read,
@@ -2489,6 +2500,44 @@ func (r *Renderer) bigIntStaticCall(method string, argNodes []frontend.Node) (as
 // variadic value.FromCodePoint. Like Math and Number, String is a namespace on
 // this path, not a value, so the receiver is not lowered.
 func (r *Renderer) stringStaticCall(method string, argNodes []frontend.Node) (ast.Expr, error) {
+	// String.raw is the built-in tag, and it is callable directly as well as through a
+	// tagged template: String.raw({ raw: parts }, ...vals) is how a user tag hands the
+	// splicing back to the language. It reads its first argument as an object, so every
+	// argument boxes rather than take the number path below.
+	if method == "raw" {
+		if len(argNodes) == 0 {
+			return nil, &NotYetLowerable{Reason: "String.raw called with no template strings object is a later slice"}
+		}
+		// A trailing spread carries a count only the run time knows, so it cannot become
+		// a fixed argument list. String.raw(o, ...vals) instead passes the substitutions
+		// as the one array-like value they already are and the runtime walks it, which is
+		// the shape a user tag reaches for when it forwards its own rest parameter.
+		if last := argNodes[len(argNodes)-1]; last.Kind() == frontend.NodeSpreadElement {
+			if len(argNodes) != 2 {
+				return nil, &NotYetLowerable{Reason: "String.raw with a spread after a fixed substitution is a later slice"}
+			}
+			kids := r.prog.Children(last)
+			if len(kids) != 1 {
+				return nil, &NotYetLowerable{Reason: "String.raw spread did not expose an operand"}
+			}
+			obj, err := r.boxOperand(argNodes[0])
+			if err != nil {
+				return nil, err
+			}
+			subs, err := r.boxOperand(kids[0])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "StringRawArgs"), Args: []ast.Expr{obj, subs}}, nil
+		}
+		args, err := r.dynamicCallArgs(argNodes)
+		if err != nil {
+			return nil, err
+		}
+		r.requireImport(valuePkg)
+		return &ast.CallExpr{Fun: sel("value", "StringRaw"), Args: args}, nil
+	}
 	var goName string
 	switch method {
 	case "fromCharCode":

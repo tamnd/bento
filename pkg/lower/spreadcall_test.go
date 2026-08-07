@@ -63,7 +63,7 @@ func TestTupleSpreadEmitsFieldReads(t *testing.T) {
 func TestTupleSpreadSideEffectingReceiverHandsBack(t *testing.T) {
 	const src = "function mk(): [number, number] { return [1, 2]; }\nfunction f(a: number, b: number): number { return a + b; }\nconsole.log(f(...mk()));\n"
 	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "kind#42") {
+	if !strings.Contains(reason, "spread element") {
 		t.Fatalf("side-effecting spread handed back with %q, want the spread-element reason", reason)
 	}
 }
@@ -76,7 +76,7 @@ func TestTupleSpreadSideEffectingReceiverHandsBack(t *testing.T) {
 func TestTupleSpreadDynamicParamHandsBack(t *testing.T) {
 	const src = "function f(a: any, b: any): number { return 0; }\nconst t: [number, number] = [1, 2];\nconsole.log(f(...t));\n"
 	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "kind#42") {
+	if !strings.Contains(reason, "spread element") {
 		t.Fatalf("dynamic-parameter spread handed back with %q, want the spread-element reason", reason)
 	}
 }

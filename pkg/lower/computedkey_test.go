@@ -65,12 +65,20 @@ func TestComputedObjectKeyCoercesToString(t *testing.T) {
 	}
 }
 
-// A computed runtime key in an argument position, where no boxing reaches the
-// literal, hands back rather than build a struct that would drop the member.
-func TestComputedKeyInArgPositionHandsBack(t *testing.T) {
+// A computed runtime key in an argument position used to hand back, since a literal
+// with no boxing around it would have to become a struct and the struct has no field
+// the key names. The parameter is any, so the literal boxes on the way in and the key
+// reaches SetKeyed like any other runtime key; ToPropertyKey names the slot, so a
+// boolean key writes "true" and the read back finds it, which is what node prints.
+func TestComputedKeyInArgPositionBoxes(t *testing.T) {
 	src := `function foo(x: any): void { console.log(x.true); } foo({ [true as boolean]: 1 });`
-	reason := renderProgramTolerantHandBack(t, src)
-	if !strings.Contains(reason, "later slice") {
-		t.Fatalf("arg-position computed key reason = %q, want a handback", reason)
+	prog := compileTolerant(t, src)
+	r := NewRenderer(prog)
+	p, err := r.RenderProgram(entryFile(t, prog))
+	if err != nil {
+		t.Fatalf("RenderProgram: %v", err)
+	}
+	if !strings.Contains(p.Source, "SetKeyed(value.Bool(true)") {
+		t.Fatalf("arg-position computed key did not reach SetKeyed:\n%s", p.Source)
 	}
 }

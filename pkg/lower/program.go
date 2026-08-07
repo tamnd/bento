@@ -581,6 +581,10 @@ func (r *Renderer) RenderProgramModules(entry frontend.Node, deps []frontend.Nod
 	// program's life. They follow the types and precede the code like any other
 	// package-level state.
 	file.Decls = append(file.Decls, r.bigLitDecls()...)
+	// Each tagged template site's strings object emits as a package var beside them,
+	// built and frozen once at init, which is how the site keeps across every
+	// evaluation the one object identity the language gives it.
+	file.Decls = append(file.Decls, r.templateObjectDecls()...)
 	// Numeric enums emit their float64-backed const blocks with the other
 	// package-level state, before the classes and functions that read them.
 	file.Decls = append(file.Decls, r.renderEnums()...)

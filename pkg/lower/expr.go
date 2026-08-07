@@ -398,6 +398,9 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 	case frontend.NodeTemplateExpression:
 		return r.templateExpression(n)
 
+	case frontend.NodeTaggedTemplateExpression:
+		return r.taggedTemplate(n)
+
 	case frontend.NodePropertyAccessExpression:
 		return r.propertyAccess(n)
 
@@ -2836,6 +2839,8 @@ func kindName(k frontend.NodeKind) string {
 		return "string literal"
 	case frontend.NodeBinaryExpression:
 		return "binary expression"
+	case frontend.NodeSpreadElement:
+		return "spread element"
 	default:
 		return "kind#" + strconv.Itoa(int(k))
 	}

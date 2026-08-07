@@ -339,8 +339,9 @@ func (a *RealAdapter) SymbolFlagsOf(s SymbolHandle) SymbolFlags {
 }
 
 // ResolvedSignature returns the signature bento reads at a node. The checker
-// answers this two different ways depending on the node: for a call or new
-// expression the signature is the one overload resolution picked, obtained with
+// answers this two different ways depending on the node: for a call, a new
+// expression, or a tagged template, all three of which invoke something, the
+// signature is the one overload resolution picked, obtained with
 // GetResolvedSignature; for a function-like declaration it is the declared
 // signature, obtained with GetSignatureFromDeclaration. GetResolvedSignature
 // panics on a declaration node, so the kind must steer the call.
@@ -350,7 +351,7 @@ func (a *RealAdapter) ResolvedSignature(p ProgramHandle, call NodeHandle) (Signa
 	node := nodeOf(call)
 	var sig *shim.Signature
 	switch node.Kind {
-	case shim.KindCallExpression, shim.KindNewExpression:
+	case shim.KindCallExpression, shim.KindNewExpression, shim.KindTaggedTemplateExpression:
 		sig = c.GetResolvedSignature(node)
 	default:
 		if isFunctionLikeKind(node.Kind) {

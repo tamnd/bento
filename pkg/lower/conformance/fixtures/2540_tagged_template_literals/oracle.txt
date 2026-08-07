@@ -1,0 +1,21 @@
+== stdout:
+join3 p<1>q<two>r
+gather-two p{1}q{two}r
+gather-none plain
+gather-adjacent {1}{two}
+showRaw cooked="a\nb" raw="a\\nb"
+count 302
+String.raw c:\temp\new1
+String.raw-plain \u0041 is not A here
+viaRaw x	y1z
+String.raw-call u7v8w
+order-result {a}-{b}
+order ab
+same-site true
+other-site false
+frozen undefined
+boxed-tag H:p1q
+boxed-binding-tag B:ptwoq
+
+== exit:
+0

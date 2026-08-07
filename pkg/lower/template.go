@@ -334,22 +334,50 @@ func (r *Renderer) appendTemplateSub(recv ast.Expr, sub frontend.Node) (ast.Expr
 // returns false when the delimiters are not the expected shape or an escape is
 // malformed, so the caller hands the template back rather than guessing.
 func templateCooked(text string) ([]uint16, bool) {
-	if len(text) < 2 {
+	inner, ok := templateInner(text)
+	if !ok {
 		return nil, false
 	}
+	return decodeJSString(inner, false)
+}
+
+// templateInner strips the delimiters the parser matched around one template
+// literal token and returns the content between them: a leading backtick (a head or
+// a whole no-substitution literal) or close brace (a middle or the tail), and a
+// trailing "${" before a substitution or a backtick at the end. It reports false
+// when the delimiters are not that shape, so a caller hands the template back rather
+// than read a token it does not recognize.
+func templateInner(text string) (string, bool) {
+	if len(text) < 2 {
+		return "", false
+	}
 	if text[0] != '`' && text[0] != '}' {
-		return nil, false
+		return "", false
 	}
 	inner := text[1:]
 	switch {
 	case strings.HasSuffix(inner, "${"):
-		inner = inner[:len(inner)-2]
+		return inner[:len(inner)-2], true
 	case strings.HasSuffix(inner, "`"):
-		inner = inner[:len(inner)-1]
-	default:
-		return nil, false
+		return inner[:len(inner)-1], true
 	}
-	return decodeJSString(inner, false)
+	return "", false
+}
+
+// templateRaw reads the raw value of one template literal token, the text a tagged
+// template's strings.raw array carries: the same content templateCooked decodes, but
+// left exactly as the source spells it, so a `\n` in the source stays a backslash and
+// an n rather than becoming a newline. The one substitution the specification does
+// make is line terminators: a CRLF or a lone CR in the source is a single LF in the
+// raw string, since the parser has already normalized the cooked side that way and
+// the two arrays would otherwise disagree on how many characters a line break is.
+func templateRaw(text string) (string, bool) {
+	inner, ok := templateInner(text)
+	if !ok {
+		return "", false
+	}
+	inner = strings.ReplaceAll(inner, "\r\n", "\n")
+	return strings.ReplaceAll(inner, "\r", "\n"), true
 }
 
 // uint16SliceLit builds the AST for a []uint16{...} composite literal of the given
