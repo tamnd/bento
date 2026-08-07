@@ -151,13 +151,24 @@ func regExpAccessor(prop string) (method string, ok bool) {
 
 // regExpMethodCall lowers a method call on a RegExp receiver. exec runs the match and
 // returns the result array or null, and test reports whether the pattern matches;
-// both take the subject string. The subject must lower as a string, which stringArgsN
-// enforces, so a non-string argument hands back rather than matching against a
-// coerced value a later slice will own. Any other method is a later slice.
+// both take the subject.
+//
+// The subject is coerced, not required. Both methods begin with ToString(string) in
+// the specification, so re.test(1) matches against "1" and re.exec(buf) against the
+// buffer's text, and stringify is that same ToString: the one String(x) and a template
+// substitution run. Requiring a string instead was the reason a third of the Node
+// compat suite stopped here, since a CommonJS `require('fs')` gives readFileSync an
+// any return and the subject arrives dynamic rather than typed. A subject stringify has
+// no coercion for is still its own later slice, which is where the hand-back moved.
+//
+// Any other method is a later slice.
 func (r *Renderer) regExpMethodCall(recvNode frontend.Node, method string, argNodes []frontend.Node) (ast.Expr, error) {
 	switch method {
 	case "exec", "test":
-		args, err := r.stringArgsN("RegExp.prototype."+method, argNodes, 1)
+		if len(argNodes) != 1 {
+			return nil, &NotYetLowerable{Reason: "RegExp.prototype." + method + " with this argument count is a later slice"}
+		}
+		arg, err := r.stringify(argNodes[0])
 		if err != nil {
 			return nil, err
 		}
@@ -169,7 +180,7 @@ func (r *Renderer) regExpMethodCall(recvNode frontend.Node, method string, argNo
 		if method == "test" {
 			name = "Test"
 		}
-		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}, Args: args}, nil
+		return &ast.CallExpr{Fun: &ast.SelectorExpr{X: recv, Sel: ident(name)}, Args: []ast.Expr{arg}}, nil
 	case "toString":
 		// re.toString() takes no argument and renders "/" + source + "/" + flags, the
 		// same literal form String(re) and a template substitution produce, so the
