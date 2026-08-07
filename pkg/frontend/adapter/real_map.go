@@ -155,6 +155,8 @@ func mapKind(k shim.Kind) NodeKind {
 		return NodeConditionalExpression
 	case shim.KindTemplateExpression:
 		return NodeTemplateExpression
+	case shim.KindTaggedTemplateExpression:
+		return NodeTaggedTemplateExpression
 	case shim.KindObjectLiteralExpression:
 		return NodeObjectLiteralExpression
 	case shim.KindArrayLiteralExpression:

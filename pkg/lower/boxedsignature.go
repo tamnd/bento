@@ -1359,7 +1359,9 @@ func (r *Renderer) forceBoxedParams(cands map[frontend.Node]boxableFunc) {
 // the one this pass may have rewritten. A callee that is not a plain identifier, or one
 // whose symbol has no function declaration, is not a call into a rewritten signature.
 func (r *Renderer) calleeFuncNode(n frontend.Node) (frontend.Node, bool) {
-	if n.Kind() != frontend.NodeCallExpression {
+	// A tagged template invokes its tag the way a call invokes its callee, and its
+	// first child is that tag, so the resolution below reads the same position.
+	if n.Kind() != frontend.NodeCallExpression && n.Kind() != frontend.NodeTaggedTemplateExpression {
 		return nil, false
 	}
 	kids := r.prog.Children(n)

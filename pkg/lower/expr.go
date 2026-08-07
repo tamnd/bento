@@ -398,6 +398,9 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 	case frontend.NodeTemplateExpression:
 		return r.templateExpression(n)
 
+	case frontend.NodeTaggedTemplateExpression:
+		return r.taggedTemplate(n)
+
 	case frontend.NodePropertyAccessExpression:
 		return r.propertyAccess(n)
 

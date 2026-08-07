@@ -692,6 +692,14 @@ type Renderer struct {
 	// constant share one var.
 	bigLits     map[string]string
 	bigLitOrder []string
+	// tmplObjs interns the template strings object of each tagged template site: the
+	// language keys its template registry on the parse node, so one site hands its tag
+	// the same frozen object however often it runs and two sites spelling the same text
+	// hand out two different ones. The map keys the site node to its package-level var
+	// name; tmplObjOrder keeps first-use order and the parts each var is built from, so
+	// the emitted block is deterministic.
+	tmplObjs     map[frontend.Node]string
+	tmplObjOrder []templateObjectDecl
 	// classes registers the module's top-level classes by source name, collected
 	// in a pre-pass so a body can construct an instance of a class declared below
 	// it; classOrder keeps source order so the emitted declarations are
@@ -953,7 +961,7 @@ const maxTypeNodes = 20000
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
-	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, nodeNamespaces: map[string]string{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, internalNamespaces: map[string]bool{}, dynImportNamespaces: map[string]bool{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, argsThreads: map[frontend.Symbol]bool{}, paramAliases: map[frontend.Symbol]string{}, arrowDropDefaults: map[frontend.Node]bool{}, boxWrapperDefaults: map[frontend.Node]bool{}, arrowCallDefaults: map[frontend.Symbol][]frontend.Node{}, paramBodyDefaults: map[frontend.Node]frontend.Node{}, closurePadParams: map[frontend.Node][]frontend.Param{}, promiseSettleParams: map[string]promiseSettle{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, monoMethodSpecs: map[frontend.Node][]monoSpec{}, bigLits: map[string]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}, seenAssign: map[frontend.Span]bool{}}
+	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, nodeNamespaces: map[string]string{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, internalNamespaces: map[string]bool{}, dynImportNamespaces: map[string]bool{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, argsThreads: map[frontend.Symbol]bool{}, paramAliases: map[frontend.Symbol]string{}, arrowDropDefaults: map[frontend.Node]bool{}, boxWrapperDefaults: map[frontend.Node]bool{}, arrowCallDefaults: map[frontend.Symbol][]frontend.Node{}, paramBodyDefaults: map[frontend.Node]frontend.Node{}, closurePadParams: map[frontend.Node][]frontend.Param{}, promiseSettleParams: map[string]promiseSettle{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, monoMethodSpecs: map[frontend.Node][]monoSpec{}, bigLits: map[string]string{}, tmplObjs: map[frontend.Node]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}, seenAssign: map[frontend.Span]bool{}}
 }
 
 // freshTemp returns a generated Go local name unique across the program, for a

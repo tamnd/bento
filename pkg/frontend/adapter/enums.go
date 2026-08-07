@@ -136,6 +136,12 @@ const (
 	NodePostfixUnaryExpression
 	NodeConditionalExpression
 	NodeTemplateExpression
+
+	// The tagged template tag`a${x}b`, which is a call rather than a string: the
+	// tag is invoked with the template's literal parts and its substitutions. Its
+	// children are the tag expression and the template it wraps.
+	NodeTaggedTemplateExpression
+
 	NodeObjectLiteralExpression
 	NodeArrayLiteralExpression
 	NodeAwaitExpression

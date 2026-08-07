@@ -90,6 +90,7 @@ const (
 	NodePostfixUnaryExpression   = adapter.NodePostfixUnaryExpression
 	NodeConditionalExpression    = adapter.NodeConditionalExpression
 	NodeTemplateExpression       = adapter.NodeTemplateExpression
+	NodeTaggedTemplateExpression = adapter.NodeTaggedTemplateExpression
 	NodeObjectLiteralExpression  = adapter.NodeObjectLiteralExpression
 	NodeArrayLiteralExpression   = adapter.NodeArrayLiteralExpression
 	NodeAwaitExpression          = adapter.NodeAwaitExpression
