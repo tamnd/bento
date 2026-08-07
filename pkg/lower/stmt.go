@@ -3334,6 +3334,13 @@ func (r *Renderer) lowerUpdate(n frontend.Node) (ast.Stmt, error) {
 		if stmt, ok, err := r.arrayElementAssign(n); ok || err != nil {
 			return stmt, err
 		}
+		// A tuple is not an array in the checker's vocabulary, so it reaches here
+		// rather than the array path above: its positions carry their own types and
+		// its Go shape is a positional struct, which makes the write a field
+		// assignment rather than a Set.
+		if stmt, ok, err := r.tupleElementAssign(n); ok || err != nil {
+			return stmt, err
+		}
 		if stmt, ok, err := r.dynamicElementAssign(n); ok || err != nil {
 			return stmt, err
 		}
@@ -4549,6 +4556,11 @@ func (r *Renderer) lowerIncDec(n frontend.Node) (ast.Stmt, error) {
 	// so it lowers to the same read-combine-store arrayElementAssign emits.
 	if operand.Kind() == frontend.NodeElementAccessExpression {
 		if stmt, ok, err := r.arrayElementIncDec(operand, tok); err != nil || ok {
+			return stmt, err
+		}
+		// A tuple position is a struct field, so its step is the Go ++ on that field
+		// rather than the array's read-combine-store.
+		if stmt, ok, err := r.tupleElementIncDec(operand, tok); err != nil || ok {
 			return stmt, err
 		}
 	}

@@ -1,0 +1,12 @@
+== stdout:
+write ab 6 true 3
+compound 18
+concat ab!
+step 19
+factory 6 POS
+spread 6:POS
+selfref 2 3
+one-slot 10 99 30
+
+== exit:
+0

@@ -700,6 +700,13 @@ type Renderer struct {
 	// the emitted block is deterministic.
 	tmplObjs     map[frontend.Node]string
 	tmplObjOrder []templateObjectDecl
+	// tupleEscapes answers, per binding, whether the program holds its tuple anywhere
+	// but the binding itself, which is what decides whether a write through it reaches
+	// the array the source means (tupleassign.go). tupleHeld is the whole-program set
+	// of nodes whose position keeps a tuple where it is, computed once on first use
+	// since the question is about the program rather than about one statement.
+	tupleEscapes map[frontend.Symbol]bool
+	tupleHeld    map[frontend.Node]bool
 	// classes registers the module's top-level classes by source name, collected
 	// in a pre-pass so a body can construct an instance of a class declared below
 	// it; classOrder keeps source order so the emitted declarations are
@@ -961,7 +968,7 @@ const maxTypeNodes = 20000
 
 // NewRenderer builds a renderer over a checked program.
 func NewRenderer(prog *frontend.Program) *Renderer {
-	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, nodeNamespaces: map[string]string{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, internalNamespaces: map[string]bool{}, dynImportNamespaces: map[string]bool{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, argsThreads: map[frontend.Symbol]bool{}, paramAliases: map[frontend.Symbol]string{}, arrowDropDefaults: map[frontend.Node]bool{}, boxWrapperDefaults: map[frontend.Node]bool{}, arrowCallDefaults: map[frontend.Symbol][]frontend.Node{}, paramBodyDefaults: map[frontend.Node]frontend.Node{}, closurePadParams: map[frontend.Node][]frontend.Param{}, promiseSettleParams: map[string]promiseSettle{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, monoMethodSpecs: map[frontend.Node][]monoSpec{}, bigLits: map[string]string{}, tmplObjs: map[frontend.Node]string{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}, seenAssign: map[frontend.Span]bool{}}
+	return &Renderer{prog: prog, decls: newDeclSet(), imports: map[string]bool{}, nodeImports: map[string]nodeBuiltin{}, nodeNamespaces: map[string]string{}, goImports: map[string]goBuiltin{}, goNamespaces: map[string]string{}, internalNamespaces: map[string]bool{}, dynImportNamespaces: map[string]bool{}, goAliases: map[string]string{}, errorLocals: map[string]bool{}, funcExprSelf: map[frontend.Symbol]string{}, argsThreads: map[frontend.Symbol]bool{}, paramAliases: map[frontend.Symbol]string{}, arrowDropDefaults: map[frontend.Node]bool{}, boxWrapperDefaults: map[frontend.Node]bool{}, arrowCallDefaults: map[frontend.Symbol][]frontend.Node{}, paramBodyDefaults: map[frontend.Node]frontend.Node{}, closurePadParams: map[frontend.Node][]frontend.Param{}, promiseSettleParams: map[string]promiseSettle{}, monoSpecs: map[frontend.Symbol][]monoSpec{}, monoMethodSpecs: map[frontend.Node][]monoSpec{}, bigLits: map[string]string{}, tmplObjs: map[frontend.Node]string{}, tupleEscapes: map[frontend.Symbol]bool{}, classes: map[string]*classInfo{}, enums: map[string]*enumInfo{}, unionBySig: map[string]*unionInfo{}, seenAssign: map[frontend.Span]bool{}}
 }
 
 // freshTemp returns a generated Go local name unique across the program, for a
