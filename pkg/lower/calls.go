@@ -1646,17 +1646,17 @@ func (r *Renderer) objectMethodCall(recvNode frontend.Node, method string, argNo
 // through the box's Call method with every argument boxed, the runtime dispatch
 // that mirrors a dynamic member read. The result is itself a value.Value, the any
 // type the checker gives a call whose callee is dynamic, so it flows on as a boxed
-// value with no further coercion here. A spread argument waits on the spread slice.
+// value with no further coercion here.
 func (r *Renderer) dynamicCall(calleeNode frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
 	callee, err := r.lowerExpr(calleeNode)
 	if err != nil {
 		return nil, err
 	}
-	args, err := r.dynamicCallArgs(argNodes)
+	args, splice, err := r.dynamicCallArgs(argNodes)
 	if err != nil {
 		return nil, err
 	}
-	return r.dynamicCallOn(callee, args), nil
+	return r.dynamicCallOn(callee, args, splice), nil
 }
 
 // dynamicCallOn builds the runtime call on an already-lowered callee and an
@@ -1665,12 +1665,21 @@ func (r *Renderer) dynamicCall(calleeNode frontend.Node, argNodes []frontend.Nod
 // runtime threads the receiver through rather than a read whose result is then called
 // with nothing bound. Every callee with no receiver slot runs exactly as it did, so
 // this only changes what a method value sees (ctorfunc.go).
-func (r *Renderer) dynamicCallOn(callee ast.Expr, args []ast.Expr) ast.Expr {
+//
+// splice says args is the single []value.Value an argument list carrying a spread
+// collects into, which goes out through Go's own variadic splat. Both Call and
+// CallMethod are variadic over value.Value, and CallMethod's receiver and key are
+// fixed parameters ahead of it, so the same slice fits either without a second shape.
+func (r *Renderer) dynamicCallOn(callee ast.Expr, args []ast.Expr, splice bool) ast.Expr {
+	ellipsis := token.NoPos
+	if splice {
+		ellipsis = token.Pos(1)
+	}
 	if recv, key, ok := dynamicKeyedRead(callee); ok {
 		r.requireImport(valuePkg)
-		return &ast.CallExpr{Fun: sel("value", "CallMethod"), Args: append([]ast.Expr{recv, key}, args...)}
+		return &ast.CallExpr{Fun: sel("value", "CallMethod"), Args: append([]ast.Expr{recv, key}, args...), Ellipsis: ellipsis}
 	}
-	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: callee, Sel: ident("Call")}, Args: args}
+	return &ast.CallExpr{Fun: &ast.SelectorExpr{X: callee, Sel: ident("Call")}, Args: args, Ellipsis: ellipsis}
 }
 
 // dynamicKeyedRead splits a lowered callee back into the receiver and the key it read,
@@ -1707,19 +1716,112 @@ func dynamicKeyedRead(callee ast.Expr) (ast.Expr, ast.Expr, bool) {
 
 // dynamicCallArgs boxes the arguments of a dynamic call, which every callee at that
 // boundary reads out of a value slice whatever its static shape was.
-func (r *Renderer) dynamicCallArgs(argNodes []frontend.Node) ([]ast.Expr, error) {
-	args := make([]ast.Expr, 0, len(argNodes))
+//
+// It reports splice=true when an argument was a spread, in which case the one
+// expression returned is the []value.Value the whole list collected into and the call
+// site splats it. An argument list with no spread keeps its fixed shape, so the common
+// call emits exactly the arguments it always did.
+func (r *Renderer) dynamicCallArgs(argNodes []frontend.Node) ([]ast.Expr, bool, error) {
+	spread := false
 	for _, a := range argNodes {
 		if a.Kind() == frontend.NodeSpreadElement {
-			return nil, &NotYetLowerable{Reason: "a spread argument in a dynamic call is a later slice"}
+			spread = true
+			break
 		}
+	}
+	if spread {
+		slice, err := r.dynamicSpreadArgs(argNodes)
+		if err != nil {
+			return nil, false, err
+		}
+		return []ast.Expr{slice}, true, nil
+	}
+	args := make([]ast.Expr, 0, len(argNodes))
+	for _, a := range argNodes {
 		boxed, err := r.boxOperand(a)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		args = append(args, boxed)
 	}
-	return args, nil
+	return args, false, nil
+}
+
+// dynamicSpreadArgs collects an argument list carrying at least one spread into the
+// single []value.Value a boxed callee reads its arguments out of. A fixed argument
+// boxes and joins the slice being built; a spread contributes however many elements it
+// turns out to hold, which is a count only the run time knows, so the list is built by
+// appending rather than written out.
+//
+// A spread operand is boxed and then drained by value.SpreadCallArgs, which is the
+// iterator protocol the language itself runs at a spread. Boxing first is what makes
+// one path serve every operand: a dynamic call's arguments are boxes whatever they
+// came from, so a tuple, a typed array, a Set, a string, and a value that was already
+// dynamic all arrive as the same value.Value and are walked the same way, and the
+// element type each of them holds has already been dealt with by the box. It also
+// evaluates the operand exactly once, which a positional splice of a tuple's fields
+// would not, so a spread of a call's result runs that call one time.
+//
+// An operand bento cannot box hands back with the reason the box itself gives, which
+// names the element type in the way rather than the spread.
+func (r *Renderer) dynamicSpreadArgs(argNodes []frontend.Node) (ast.Expr, error) {
+	seedType := &ast.ArrayType{Elt: sel("value", "Value")}
+	// f(...xs), the whole list one spread, is the shape this reaches for most often, and
+	// the drained slice is already the argument list. IterateToSlice builds it fresh, so
+	// handing it straight over copies nothing the appended form would have protected.
+	if len(argNodes) == 1 && argNodes[0].Kind() == frontend.NodeSpreadElement {
+		if operands := r.prog.Children(argNodes[0]); len(operands) == 1 {
+			boxed, err := r.boxOperand(operands[0])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			return &ast.CallExpr{Fun: sel("value", "SpreadCallArgs"), Args: []ast.Expr{boxed}}, nil
+		}
+	}
+	var acc ast.Expr
+	var pending []ast.Expr
+	flush := func() {
+		if len(pending) == 0 {
+			return
+		}
+		if acc == nil {
+			acc = &ast.CompositeLit{Type: seedType, Elts: pending}
+		} else {
+			acc = &ast.CallExpr{Fun: ident("append"), Args: append([]ast.Expr{acc}, pending...)}
+		}
+		pending = nil
+	}
+	for _, a := range argNodes {
+		if a.Kind() != frontend.NodeSpreadElement {
+			boxed, err := r.boxOperand(a)
+			if err != nil {
+				return nil, err
+			}
+			pending = append(pending, boxed)
+			continue
+		}
+		operands := r.prog.Children(a)
+		if len(operands) != 1 {
+			return nil, &NotYetLowerable{Reason: "a spread argument with an unexpected shape is a later slice"}
+		}
+		boxed, err := r.boxOperand(operands[0])
+		if err != nil {
+			return nil, err
+		}
+		flush()
+		if acc == nil {
+			acc = &ast.CompositeLit{Type: seedType}
+		}
+		drained := &ast.CallExpr{Fun: sel("value", "SpreadCallArgs"), Args: []ast.Expr{boxed}}
+		acc = &ast.CallExpr{Fun: ident("append"), Args: []ast.Expr{acc, drained}, Ellipsis: token.Pos(1)}
+	}
+	flush()
+	if acc == nil {
+		acc = &ast.CompositeLit{Type: seedType}
+	}
+	r.requireImport(valuePkg)
+	return acc, nil
 }
 
 // functionValueCallee lowers a callee expression that is not a named function to
@@ -2531,9 +2633,16 @@ func (r *Renderer) stringStaticCall(method string, argNodes []frontend.Node) (as
 			r.requireImport(valuePkg)
 			return &ast.CallExpr{Fun: sel("value", "StringRawArgs"), Args: []ast.Expr{obj, subs}}, nil
 		}
-		args, err := r.dynamicCallArgs(argNodes)
+		args, splice, err := r.dynamicCallArgs(argNodes)
 		if err != nil {
 			return nil, err
+		}
+		// value.StringRaw takes the strings object as a fixed parameter ahead of its
+		// variadic substitutions, so the one slice a spliced list collects into cannot
+		// fill both. Only a spread among the substitutions reaches here, since a trailing
+		// one took the StringRawArgs path above.
+		if splice {
+			return nil, &NotYetLowerable{Reason: "String.raw with a spread before its last substitution is a later slice"}
 		}
 		r.requireImport(valuePkg)
 		return &ast.CallExpr{Fun: sel("value", "StringRaw"), Args: args}, nil

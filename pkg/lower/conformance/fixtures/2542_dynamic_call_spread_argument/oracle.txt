@@ -1,0 +1,16 @@
+== stdout:
+two x 2
+two p q
+two m n
+three lead x 2
+three x 2 trail
+two h i
+two 1 2
+two u v
+calls 1
+method x 2
+two undefined undefined
+threw Spread syntax requires ...iterable[Symbol.iterator] to be a function
+
+== exit:
+0

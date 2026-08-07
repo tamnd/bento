@@ -15,6 +15,19 @@ package value
 // "os.cpus is not iterable", naming the expression the program wrote, and the runtime
 // cannot recover that from the value. The lowerer has it, so it hands it over.
 func Iterate(v Value, src string) *IterHelper {
+	return iterate(v, Concat(FromGoString(src), FromGoString(" is not iterable")))
+}
+
+// IterateSpreadCall is Iterate for the one site JavaScript words differently. A spread
+// in a call's argument list that finds no iterator says the syntax requires one and
+// names no expression, where an array literal's spread, an array destructuring, and a
+// for...of all say "x is not iterable". Everything about the walk is the same, so the
+// two share the decision below rather than each carrying their own copy of it.
+func IterateSpreadCall(v Value) *IterHelper {
+	return iterate(v, FromGoString("Spread syntax requires ...iterable[Symbol.iterator] to be a function"))
+}
+
+func iterate(v Value, notIterable BStr) *IterHelper {
 	// The spec looks up Symbol.iterator first and unconditionally, so a receiver that
 	// defines its own overrides everything below. That matters for an array: bento
 	// installs no Array.prototype[Symbol.iterator], so an array normally falls through
@@ -32,11 +45,13 @@ func Iterate(v Value, src string) *IterHelper {
 		// carries a length and integer keys walks the same way, which is the shape a
 		// built-in that answers an arguments-like object hands back.
 		//
-		// A plain object with no length reads length as undefined, which ToLength turns
-		// into 0, so it iterates zero times rather than throwing. That is a deliberate
-		// narrowing of the spec, which throws for a non-iterable object. Getting it right
-		// needs an own-length probe the lowerer does not currently have a use for, and
-		// walking an object with a length is the case that appears in real programs.
+		// An object with no length of its own is not that shape and is not iterable, so
+		// it throws the way the spec does. Reading length off it would answer undefined,
+		// which ToLength turns into 0, and the walk would quietly yield nothing where
+		// JavaScript raises a TypeError. An array is always iterable and skips the probe.
+		if v.Kind() == KindObject && !v.HasOwnElem(StringValue(FromGoString("length"))) {
+			break
+		}
 		i := 0
 		return NewIterHelper(func() IterResult {
 			if i >= arrayLikeLen(v) {
@@ -60,7 +75,7 @@ func Iterate(v Value, src string) *IterHelper {
 			return IterResult{Value: StringValue(p)}
 		})
 	}
-	Throw(NewTypeError(Concat(FromGoString(src), FromGoString(" is not iterable"))))
+	Throw(NewTypeError(notIterable))
 	return nil
 }
 
@@ -114,7 +129,17 @@ func iterObject(next func() IterResult) Value {
 // `const [a, b] = it` both want every element at once. It is Iterate driven to
 // exhaustion, so the two agree on what is iterable and on what each element is.
 func IterateToSlice(v Value, src string) []Value {
-	it := Iterate(v, src)
+	return drainToSlice(Iterate(v, src))
+}
+
+// SpreadCallArgs drains a spread operand in a call's argument list into the boxed
+// arguments the callee reads, which is IterateToSlice under the message that site
+// words differently.
+func SpreadCallArgs(v Value) []Value {
+	return drainToSlice(IterateSpreadCall(v))
+}
+
+func drainToSlice(it *IterHelper) []Value {
 	out := []Value{}
 	for {
 		r := it.Next()

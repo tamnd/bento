@@ -64,7 +64,10 @@ func (r *Renderer) taggedTemplate(n frontend.Node) (ast.Expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		return r.dynamicCallOn(callee, args), nil
+		// A tagged template's arguments are the strings object and the substitutions,
+		// both of which the parse gives one at a time, so the list never carries a spread
+		// and goes out with its fixed shape.
+		return r.dynamicCallOn(callee, args, false), nil
 	}
 
 	if tagNode.Kind() != frontend.NodeIdentifier {
