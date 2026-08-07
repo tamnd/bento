@@ -39,6 +39,10 @@ func TestTranslateRegExp(t *testing.T) {
 		{"foo.bar", ""},
 		{"foo.bar", "s"},
 		{"abc", "m"},            // multiline without an anchor is fine
+		{`^foo`, "m"},           // an anchored multiline pattern telling no terminator apart
+		{`^\s*(.*)$`, "im"},     // the shape the Node compat suite reads a file with
+		{`^[a-z]+$`, "m"},       // a class holding no terminator
+		{`^[^a-z]*$`, "m"},      // a negated class holding all four of them
 		{"a(?i:b)c", ""},        // inline case-insensitive modifier
 		{"a(?-i:b)c", "i"},      // inline modifier disabling the global i
 		{"a(?s:.)b", ""},        // inline dot-all modifier
@@ -58,18 +62,23 @@ func TestTranslateRegExp(t *testing.T) {
 	}
 
 	handback := []struct{ pattern, flags string }{
-		{`(a)\1`, ""},      // backreference
-		{`(?=foo)`, ""},    // lookahead
-		{`(?!foo)`, ""},    // negative lookahead
-		{`(?<=foo)`, ""},   // lookbehind
-		{`\p{L}`, ""},      // unicode property escape, a later slice
-		{`foo`, "u"},       // unicode mode, a later slice
-		{`foo`, "v"},       // unicode-sets mode, a later slice
-		{`^foo`, "m"},      // multiline anchor needs the ECMAScript terminator set
-		{`a(?m:b)c`, ""},   // inline multiline modifier, a later slice
-		{`a(?i)b`, ""},     // bare inline modifier, a later slice
-		{`a(?x:b)c`, ""},   // inline modifier with an unsupported flag
-		{`(?s-:.es$)`, ""}, // empty-remove inline modifier RE2 cannot compile, caught by the trial gate
+		{`(a)\1`, ""},          // backreference
+		{`(?=foo)`, ""},        // lookahead
+		{`(?!foo)`, ""},        // negative lookahead
+		{`(?<=foo)`, ""},       // lookbehind
+		{`\p{L}`, ""},          // unicode property escape, a later slice
+		{`foo`, "u"},           // unicode mode, a later slice
+		{`foo`, "v"},           // unicode-sets mode, a later slice
+		{`^a\r`, "m"},          // names a terminator outright
+		{`^a[^\n]`, "m"},       // a class holding one terminator and not the others
+		{`^a[\x00-\x20]`, "m"}, // a range splitting them
+		{`^a[\s]`, "m"},        // \s in a class keeps RE2's ASCII reading
+		{`^a\cM`, "m"},         // a control escape naming the carriage return
+		{`^a\u2028`, "m"},      // a separator named by code point
+		{`a(?m:b)c`, ""},       // inline multiline modifier, a later slice
+		{`a(?i)b`, ""},         // bare inline modifier, a later slice
+		{`a(?x:b)c`, ""},       // inline modifier with an unsupported flag
+		{`(?s-:.es$)`, ""},     // empty-remove inline modifier RE2 cannot compile, caught by the trial gate
 	}
 	for _, c := range handback {
 		fl, _ := parseRegExpFlags(c.flags)

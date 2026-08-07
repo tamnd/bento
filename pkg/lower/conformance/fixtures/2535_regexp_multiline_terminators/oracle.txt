@@ -1,0 +1,32 @@
+== stdout:
+nl-first => "alpha"
+nl-middle => true
+nl-last => true
+nl-miss => false
+cr-middle => true
+cr-index => 6
+cr-capture => "beta"
+crlf-word => "a"
+crlf-bb => true
+crlf-ccc => true
+crlf-empty => true
+ls-two => true
+ps-three => true
+sep-first => "one"
+sep-index => 4
+sep-capture => "two"
+sep-input => "one two three"
+replace-crlf => "a\r\nZ\r\nccc"
+replace-sep => "one Z three"
+replace-group => "one [two] three"
+search-crlf => 3
+search-sep => 4
+plain-whole => true
+plain-inside => false
+dollar-before-cr => true
+dollar-before-sep => true
+unanchored-cr => true
+hardware => "BCM2835"
+
+== exit:
+0
