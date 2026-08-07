@@ -35,6 +35,15 @@ type RegExp struct {
 	// assign it any value, which exec then coerces with ToLength on use.
 	lastIndex float64
 
+	// lineNormalize records that this pattern's ^ or $ has to see ECMAScript's line
+	// terminators rather than RE2's. RE2 breaks a line only at \n while the language
+	// breaks it at \r and the two separators too, so a subject carrying one of those
+	// is normalized before the search; see normalizeLineTerminators. It is set only
+	// for a multiline pattern that actually uses an anchor and that the translator
+	// proved cannot tell the four terminators apart, so normalizing changes no other
+	// answer the pattern gives.
+	lineNormalize bool
+
 	// The flag set, each flag broken out so a match path reads a bool rather than
 	// re-scanning the flags string. The canonical flags string is rebuilt from these
 	// in the order the specification fixes.
@@ -118,8 +127,10 @@ func NewRegExpLiteral(pattern, flags string) *RegExp {
 		Throw(NewSyntaxError(FromGoString("Invalid regular expression: /" + pattern + "/")))
 	}
 	return &RegExp{
-		source:     FromGoString(canonicalSource(pattern)),
-		re:         prog,
+		source:        FromGoString(canonicalSource(pattern)),
+		re:            prog,
+		lineNormalize: multilineAnchored(pattern, fl),
+
 		global:     fl.global,
 		ignoreCase: fl.ignoreCase,
 		multiline:  fl.multiline,
@@ -355,18 +366,18 @@ func (re *RegExp) Test(s BStr) bool {
 // coordinates, and updates lastIndex to the UTF-16 offset past the match on success or
 // to zero on failure, but only when the global or sticky flag makes lastIndex live.
 func (re *RegExp) match(s BStr) ([]int, bool) {
-	str := re2Subject(s)
+	ns := re.searchText(re2Subject(s))
 	stateful := re.global || re.sticky
 	startByte := 0
 	if stateful {
-		off, ok := re2Byte(str, lastIndexToLength(re.lastIndex))
+		off, ok := re2Byte(ns.text, lastIndexToLength(re.lastIndex))
 		if !ok {
 			re.lastIndex = 0
 			return nil, false
 		}
 		startByte = off
 	}
-	loc := re.re.FindStringSubmatchIndex(str[startByte:])
+	loc := re.re.FindStringSubmatchIndex(ns.text[startByte:])
 	if loc == nil || (re.sticky && loc[0] != 0) {
 		if stateful {
 			re.lastIndex = 0
@@ -383,10 +394,87 @@ func (re *RegExp) match(s BStr) ([]int, bool) {
 			abs[i] = v + startByte
 		}
 	}
+	// lastIndex counts UTF-16 units, which the normalization preserves one for one, so
+	// it reads off the searched text; the returned byte indices are mapped back to the
+	// subject the caller holds, whose separators are three bytes rather than one.
 	if stateful {
-		re.lastIndex = float64(re2Unit(str, abs[1]))
+		re.lastIndex = float64(re2Unit(ns.text, abs[1]))
 	}
-	return abs, true
+	return ns.subjectIndices(abs), true
+}
+
+// lineNormalized is the text a multiline search runs against together with what it
+// takes to read a position in it back as a position in the subject. text is the
+// subject with every ECMAScript line terminator rewritten to \n, the one break RE2
+// knows, so ^ and $ land where the language says they do. shifts holds the byte
+// offsets in text where a three-byte separator collapsed into that one byte, in
+// order, which is the only place the two coordinate systems drift apart.
+//
+// A regexp that needs no normalization, which is nearly all of them, carries the
+// subject itself and no shifts, and every mapping below is then the identity.
+type lineNormalized struct {
+	text   string
+	shifts []int
+}
+
+// subjectByte reads a byte offset in the searched text back as a byte offset in the
+// subject. A negative offset is the "group did not participate" marker and passes
+// through.
+func (n lineNormalized) subjectByte(off int) int {
+	if off < 0 || len(n.shifts) == 0 {
+		return off
+	}
+	extra := 0
+	for _, p := range n.shifts {
+		if p >= off {
+			break
+		}
+		extra += 2
+	}
+	return off + extra
+}
+
+// subjectIndices maps a whole submatch index slice back into subject coordinates.
+func (n lineNormalized) subjectIndices(loc []int) []int {
+	if loc == nil || len(n.shifts) == 0 {
+		return loc
+	}
+	out := make([]int, len(loc))
+	for i, v := range loc {
+		out[i] = n.subjectByte(v)
+	}
+	return out
+}
+
+// searchText prepares the subject for this regexp's search. Only an anchored
+// multiline pattern sees anything but the subject itself, and then only when the
+// subject actually carries a terminator RE2 does not break a line at: \r and the two
+// separators become \n, so RE2's line-oriented ^ and $ answer what ECMAScript's do.
+//
+// The rewrite is invisible to the rest of the match because the translator admitted
+// the pattern only after proving it cannot tell one terminator from another, so no
+// atom in it can see the difference, and because every replaced character is one
+// UTF-16 unit before and after, so .index, lastIndex, and every other position the
+// language reports are unchanged. Only byte offsets move, which subjectByte undoes.
+func (re *RegExp) searchText(str string) lineNormalized {
+	if !re.lineNormalize || !strings.ContainsAny(str, "\r\u2028\u2029") {
+		return lineNormalized{text: str}
+	}
+	var b strings.Builder
+	b.Grow(len(str))
+	var shifts []int
+	for _, r := range str {
+		switch r {
+		case '\r':
+			b.WriteByte('\n')
+		case '\u2028', '\u2029':
+			shifts = append(shifts, b.Len())
+			b.WriteByte('\n')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return lineNormalized{text: b.String(), shifts: shifts}
 }
 
 // buildResult packs the match into the array RegExp.prototype.exec returns: element
@@ -683,10 +771,12 @@ func translateRegExp(pattern string, fl regExpFlags) (string, bool, string) {
 	}
 	if fl.multiline {
 		// RE2's multiline flag treats only \n as a line boundary while ECMAScript treats
-		// \r and the two line separators too, so a multiline pattern that uses ^ or $
-		// would disagree; it hands back until that gap is closed.
-		if strings.ContainsAny(stripEscapesAndClasses(pattern), "^$") {
-			return "", false, "a multiline regexp using ^ or $ needs the ECMAScript line-terminator set, a later slice"
+		// \r and the two separators too, so an anchored multiline pattern would disagree
+		// on a subject carrying one of those. The match normalizes such a subject instead
+		// (normalizeLineTerminators), which is faithful only for a pattern that cannot
+		// tell the four terminators apart; one that can still hands back.
+		if multilineAnchored(pattern, fl) && patternTellsTerminatorsApart(pattern) {
+			return "", false, "a multiline regexp that tells the line terminators apart is a later slice"
 		}
 		prefix += "m"
 	}
@@ -879,6 +969,232 @@ func validCaptureName(name string) bool {
 		}
 	}
 	return true
+}
+
+// lineTerminators is ECMAScript's LineTerminator set (12 §12.3): the two ASCII
+// breaks and the two Unicode separators. RE2 breaks a line only at the first of
+// them, which is the whole of the multiline gap the normalization closes.
+var lineTerminators = []rune{'\n', '\r', '\u2028', '\u2029'}
+
+// isLineTerminator reports whether r is one of them.
+func isLineTerminator(r rune) bool {
+	for _, t := range lineTerminators {
+		if r == t {
+			return true
+		}
+	}
+	return false
+}
+
+// multilineAnchored reports whether a pattern's line boundaries are observable: it
+// carries the m flag and uses a bare ^ or $ somewhere. Without the flag the anchors
+// mean start and end of the whole subject, which RE2 spells the same way, and
+// without an anchor the flag changes nothing a match can see. It is the one
+// condition the terminator normalization turns on for, so the translator's guard
+// and the constructor's flag read it from here rather than each spelling it.
+func multilineAnchored(pattern string, fl regExpFlags) bool {
+	return fl.multiline && strings.ContainsAny(stripEscapesAndClasses(pattern), "^$")
+}
+
+// patternTellsTerminatorsApart reports whether the pattern can distinguish one line
+// terminator from another, which is what decides whether normalizing them to \n is
+// faithful. Rewriting a subject's \r to \n is invisible to a pattern that either
+// matches all four terminators at a position or matches none of them, and visible to
+// one that matches some: /\r/ would stop finding what it was written to find, and
+// /[^\n]/ would start rejecting what it used to accept.
+//
+// The scan is syntactic and errs toward true. A terminator named outright, as a
+// literal character or through a \n, \r, \xHH, \uHHHH, \u{H...} or \cX escape,
+// counts. Inside a class, a range counts when the four terminators fall on both
+// sides of it, and \s or \S counts because a class keeps RE2's ASCII reading of
+// those, which holds \n and \r but not the two separators. The escapes with a
+// uniform answer, \d \D \w \W and \s \S outside a class (rewritten to the explicit
+// Unicode classes above), say nothing about which terminator a subject holds and so
+// do not count.
+func patternTellsTerminatorsApart(pattern string) bool {
+	rs := []rune(pattern)
+	for i := 0; i < len(rs); i++ {
+		switch c := rs[i]; c {
+		case '\\':
+			if i+1 >= len(rs) {
+				return true // a trailing backslash hands back on its own anyway
+			}
+			r, consumed, ok := escapedCodePoint(rs, i)
+			if !ok {
+				i++ // an escape naming a class or an assertion, not a character
+				continue
+			}
+			if isLineTerminator(r) {
+				return true
+			}
+			i += consumed - 1
+		case '[':
+			apart, consumed := classTellsTerminatorsApart(rs, i)
+			if apart {
+				return true
+			}
+			i += consumed - 1
+		default:
+			if isLineTerminator(c) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// classTellsTerminatorsApart reads the character class opening at i and reports
+// whether its members hold some line terminators and not others, along with the runes
+// it spans. Negation is not asked about: flipping membership keeps a uniform class
+// uniform. A range counts when the terminators fall on both sides of it, and \s or \S
+// counts because a class keeps RE2's ASCII reading of them, which holds \n and \r but
+// neither separator. An unterminated class reads as telling them apart, which costs
+// nothing since it hands back on its own.
+func classTellsTerminatorsApart(rs []rune, i int) (bool, int) {
+	j := i + 1
+	if j < len(rs) && rs[j] == '^' {
+		j++
+	}
+	for ; j < len(rs); j++ {
+		c := rs[j]
+		if c == ']' {
+			return false, j - i + 1
+		}
+		lo, consumed := c, 1
+		if c == '\\' {
+			if j+1 >= len(rs) {
+				return true, 0
+			}
+			if rs[j+1] == 's' || rs[j+1] == 'S' {
+				return true, 0
+			}
+			r, n, ok := escapedCodePoint(rs, j)
+			if !ok {
+				j++ // \d, \w and the rest answer the same for all four
+				continue
+			}
+			lo, consumed = r, n
+		}
+		if isLineTerminator(lo) {
+			return true, 0
+		}
+		if j+consumed+1 < len(rs) && rs[j+consumed] == '-' && rs[j+consumed+1] != ']' {
+			hi, n, ok := classRangeEnd(rs, j+consumed+1)
+			if !ok {
+				return true, 0
+			}
+			if splitsTerminators(lo, hi) {
+				return true, 0
+			}
+			j = j + consumed + n
+			continue
+		}
+		j += consumed - 1
+	}
+	return true, 0
+}
+
+// escapedCodePoint reads the character an escape at index i denotes, reporting
+// ok=false for an escape that names a class (\d, \s), an assertion (\b), or a
+// backreference, none of which is a single character. consumed counts the runes the
+// escape spans, the backslash included.
+func escapedCodePoint(rs []rune, i int) (r rune, consumed int, ok bool) {
+	n := rs[i+1]
+	switch n {
+	case 'n':
+		return '\n', 2, true
+	case 'r':
+		return '\r', 2, true
+	case 't':
+		return '\t', 2, true
+	case 'f':
+		return '\f', 2, true
+	case 'v':
+		return '\v', 2, true
+	case '0':
+		return 0, 2, true
+	case 'x':
+		if v, okHex := hexRunes(rs, i+2, 2); okHex {
+			return v, 4, true
+		}
+		return 0, 0, false
+	case 'u':
+		if i+2 < len(rs) && rs[i+2] == '{' {
+			for j := i + 3; j < len(rs); j++ {
+				if rs[j] == '}' {
+					if v, okHex := hexRunes(rs, i+3, j-(i+3)); okHex {
+						return v, j - i + 1, true
+					}
+					return 0, 0, false
+				}
+			}
+			return 0, 0, false
+		}
+		if v, okHex := hexRunes(rs, i+2, 4); okHex {
+			return v, 6, true
+		}
+		return 0, 0, false
+	case 'c':
+		// \cX is the control character X mod 32, so \cJ is \n and \cM is \r.
+		if i+2 < len(rs) {
+			u := rs[i+2]
+			if (u >= 'a' && u <= 'z') || (u >= 'A' && u <= 'Z') {
+				return u % 32, 3, true
+			}
+		}
+		return 0, 0, false
+	case 'd', 'D', 's', 'S', 'w', 'W', 'b', 'B', 'p', 'P', 'k':
+		return 0, 0, false
+	}
+	if n >= '1' && n <= '9' {
+		return 0, 0, false // a backreference, which hands back on its own
+	}
+	return n, 2, true // an identity escape, the character itself
+}
+
+// classRangeEnd reads the upper endpoint of a character-class range starting at i,
+// which is either an escape or a plain character.
+func classRangeEnd(rs []rune, i int) (r rune, consumed int, ok bool) {
+	if rs[i] != '\\' {
+		return rs[i], 1, true
+	}
+	if i+1 >= len(rs) {
+		return 0, 0, false
+	}
+	return escapedCodePoint(rs, i)
+}
+
+// hexRunes reads n hex digits starting at i as a code point.
+func hexRunes(rs []rune, i, n int) (rune, bool) {
+	if n <= 0 || i+n > len(rs) {
+		return 0, false
+	}
+	var v rune
+	for _, c := range rs[i : i+n] {
+		switch {
+		case c >= '0' && c <= '9':
+			v = v*16 + (c - '0')
+		case c >= 'a' && c <= 'f':
+			v = v*16 + (c - 'a' + 10)
+		case c >= 'A' && c <= 'F':
+			v = v*16 + (c - 'A' + 10)
+		default:
+			return 0, false
+		}
+	}
+	return v, true
+}
+
+// splitsTerminators reports whether the inclusive range lo..hi holds some of the line
+// terminators and not others, the shape that makes normalizing them visible.
+func splitsTerminators(lo, hi rune) bool {
+	in := 0
+	for _, t := range lineTerminators {
+		if t >= lo && t <= hi {
+			in++
+		}
+	}
+	return in != 0 && in != len(lineTerminators)
 }
 
 // stripEscapesAndClasses returns the pattern with its escaped characters and

@@ -11,14 +11,15 @@ import (
 // before the fix and must not again.
 
 // TestRegExpInitializerHandsBackWholeDecl proves a var declaration whose
-// initializer is a regexp literal the RE2 host cannot yet model, `var re = /x/m`
-// (a multiline literal a later slice owns), hands the whole file back rather than
-// emit a bare `var re *value.RegExp` nil placeholder a later re.test(...) would
-// dereference at runtime. A regexp literal is the catch-all NodeUnknown a type
-// annotation also wears, so the initializer detection must read the '=' from the
-// source, not the node kind, to see it is an initializer at all.
+// initializer is a regexp literal the RE2 host cannot model, `var re = /(?=x)/`
+// (a lookahead, which RE2 has no construct for), hands the whole file back rather
+// than emit a bare `var re *value.RegExp` nil placeholder a later re.test(...)
+// would dereference at runtime. A regexp literal is the catch-all NodeUnknown a
+// type annotation also wears, so the initializer detection must read the '=' from
+// the source, not the node kind, to see it is an initializer at all. The pattern
+// was a multiline literal until the line-terminator slice made that one lower.
 func TestRegExpInitializerHandsBackWholeDecl(t *testing.T) {
-	const src = "var re = /.es$/m;\nvar x = re.test(\"nes\");\n"
+	const src = "var re = /(?=.es)$/;\nvar x = re.test(\"nes\");\n"
 	prog := compileTolerant(t, src)
 	r := NewRenderer(prog)
 	r.SetGoSignatures(testGoSignatures())

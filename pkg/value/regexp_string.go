@@ -20,12 +20,14 @@ import (
 // regexp still matches only at position zero, the search-from-zero the specification
 // fixes, so a later match does not count.
 func (re *RegExp) Search(s BStr) float64 {
-	str := re2Subject(s)
-	loc := re.re.FindStringIndex(str)
+	// The answer is a UTF-16 offset, which the line normalization preserves one for
+	// one, so it reads off the searched text with no mapping back.
+	ns := re.searchText(re2Subject(s))
+	loc := re.re.FindStringIndex(ns.text)
 	if loc == nil || (re.sticky && loc[0] != 0) {
 		return -1
 	}
-	return float64(re2Unit(str, loc[0]))
+	return float64(re2Unit(ns.text, loc[0]))
 }
 
 // MatchStr runs String.prototype.match (22 §22.1.3.14). A non-global regexp returns
@@ -67,7 +69,8 @@ func (re *RegExp) ReplaceStr(s, repl BStr) BStr {
 	tmpl := re2Subject(repl)
 	names := re.re.SubexpNames()
 	if !re.global {
-		loc := re.re.FindStringSubmatchIndex(str)
+		ns := re.searchText(str)
+		loc := ns.subjectIndices(re.re.FindStringSubmatchIndex(ns.text))
 		if loc == nil || (re.sticky && loc[0] != 0) {
 			return s
 		}
@@ -117,7 +120,8 @@ func (re *RegExp) ReplaceAllStr(s, repl BStr) BStr {
 func (re *RegExp) ReplaceFuncStr(s BStr, fn func(BStr) BStr) BStr {
 	str := re2Subject(s)
 	if !re.global {
-		loc := re.re.FindStringSubmatchIndex(str)
+		ns := re.searchText(str)
+		loc := ns.subjectIndices(re.re.FindStringSubmatchIndex(ns.text))
 		if loc == nil || (re.sticky && loc[0] != 0) {
 			return s
 		}
@@ -180,19 +184,22 @@ func (re *RegExp) SplitStr(s BStr, limited bool, limit float64) Value {
 		}
 		return NewArrayValue([]Value{StringValue(s)})
 	}
+	// The walk runs over the searched text and cuts the subject, so a separator whose
+	// anchors need the normalized line breaks still cuts on the subject's own bytes.
+	ns := re.searchText(str)
 	p, q := 0, 0
-	for q < len(str) {
-		loc := re.re.FindStringSubmatchIndex(str[q:])
+	for q < len(ns.text) {
+		loc := re.re.FindStringSubmatchIndex(ns.text[q:])
 		if loc == nil || loc[0] != 0 {
-			q += runeSize(str, q)
+			q += runeSize(ns.text, q)
 			continue
 		}
 		e := q + loc[1]
 		if e == p {
-			q += runeSize(str, q)
+			q += runeSize(ns.text, q)
 			continue
 		}
-		out = append(out, StringValue(re2Text(str, p, q)))
+		out = append(out, StringValue(re2Text(str, ns.subjectByte(p), ns.subjectByte(q))))
 		if len(out) >= lim {
 			return NewArrayValue(out[:lim])
 		}
@@ -201,7 +208,7 @@ func (re *RegExp) SplitStr(s BStr, limited bool, limit float64) Value {
 			if lo < 0 {
 				out = append(out, Undefined)
 			} else {
-				out = append(out, StringValue(re2Text(str, q+lo, q+hi)))
+				out = append(out, StringValue(re2Text(str, ns.subjectByte(q+lo), ns.subjectByte(q+hi))))
 			}
 			if len(out) >= lim {
 				return NewArrayValue(out[:lim])
@@ -210,7 +217,7 @@ func (re *RegExp) SplitStr(s BStr, limited bool, limit float64) Value {
 		p = e
 		q = p
 	}
-	out = append(out, StringValue(re2Text(str, p, len(str))))
+	out = append(out, StringValue(re2Text(str, ns.subjectByte(p), len(str))))
 	if len(out) > lim {
 		out = out[:lim]
 	}
