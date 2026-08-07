@@ -1921,12 +1921,21 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A body the checker gives no type is not always a body with nothing to hand back.
+	// An operator whose operands disagree on a numeric kind, and a call of a function
+	// whose body is one, each compute a value and lower to a box, and the checker leaves
+	// both untyped rather than void; see untypednumeric.go. Such an arrow answers the box
+	// below rather than standing its body in the statement position, which would drop the
+	// result on the floor. The arrow's own return type is what tells the two apart: error
+	// recovery reports any for a body it could not type and void for a body that really
+	// hands nothing back.
+	answersUntypedBox := isVoidReturn(bodyType) && !isVoidReturn(sig.Return) && r.untypedBoxedExpr(body)
 	// A void body, the shape a callback that runs for its effect takes ((i) =>
 	// console.log(i) against a Go func(int)), gives the func literal no result and
 	// stands the body in the statement position, the same way resultFields drops a
 	// void return. Only a call expression is a legal Go statement, so a void body
 	// that lowered to anything else hands back rather than emit invalid Go.
-	if isVoidReturn(bodyType) {
+	if isVoidReturn(bodyType) && !answersUntypedBox {
 		call, ok := loweredBody.(*ast.CallExpr)
 		if !ok {
 			return nil, &NotYetLowerable{Reason: "arrow with a void body that is not a call is a later slice"}
@@ -1972,6 +1981,20 @@ func (r *Renderer) arrowFunc(n frontend.Node) (ast.Expr, error) {
 				Results: &ast.FieldList{List: []*ast.Field{{Type: retType}}},
 			},
 			Body: &ast.BlockStmt{List: append(binds, &ast.ReturnStmt{Results: []ast.Expr{coerced}})},
+		}, nil
+	}
+	// The untyped-box body decided above answers value.Value, the type its lowering
+	// already has. It routes after the contextual return, which spells the result at the
+	// slot's own type and coerces the box into it, and after the boxed-return mark, which
+	// says the same thing for an arrow the signature pass claimed.
+	if answersUntypedBox {
+		r.requireImport(valuePkg)
+		return &ast.FuncLit{
+			Type: &ast.FuncType{
+				Params:  &ast.FieldList{List: fields},
+				Results: &ast.FieldList{List: []*ast.Field{{Type: sel("value", "Value")}}},
+			},
+			Body: &ast.BlockStmt{List: append(binds, &ast.ReturnStmt{Results: []ast.Expr{loweredBody}})},
 		}, nil
 	}
 	retType, err := r.conciseResultType(body, bodyType)

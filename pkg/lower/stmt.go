@@ -1864,6 +1864,28 @@ func (r *Renderer) buildVarDecl(decls []frontend.Node) (ast.Stmt, error) {
 			r.markDynBound(name)
 			continue
 		}
+		// A binding initialized by an arithmetic or bitwise operator the checker gives
+		// no type holds the boxed value.Value the runtime operator returns, because
+		// whether the result is a bigint or a number is decided when the operands are in
+		// hand (untypednumeric.go). The binding inherits that absence of a type, so there
+		// is no Go type to name for the slot and the declaration would hand back with
+		// "no type at this position"; the box is the slot, exactly as it is for the
+		// regExpBoxedResultCall sibling above, and marking the name dynamic routes every
+		// later read of it through the value model.
+		if r.isUntypedNumericBinary(kids[initIdx]) && r.prog.TypeAt(kids[0]).Flags == 0 {
+			numInit, err := r.lowerExpr(kids[initIdx])
+			if err != nil {
+				return nil, err
+			}
+			r.requireImport(valuePkg)
+			specs = append(specs, &ast.ValueSpec{
+				Names:  []*ast.Ident{ident(name)},
+				Type:   sel("value", "Value"),
+				Values: []ast.Expr{numInit},
+			})
+			r.markDynBound(name)
+			continue
+		}
 		// A binding initialized by a divergent accessor read holds the boxed
 		// value.Value the field carries (decls.go). When the binding's inferred type
 		// is a clean primitive the box coerces down to it through bindingInit below,

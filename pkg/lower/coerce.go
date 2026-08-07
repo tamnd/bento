@@ -465,6 +465,13 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.divergentAccessorRead(n) {
 		return true
 	}
+	// A call the checker gives no type at all, of a function whose Go result is a box,
+	// is that box. It is the one call shape where the absent type is the answer rather
+	// than a missing one: what the callee hands back is a value.Value, and reading the
+	// callee is the only way to learn that; see untypednumeric.go.
+	if r.callOfUntypedResult(n) {
+		return true
+	}
 	// A call whose callee is a binding stored as a boxed value.Value returns a box:
 	// the runtime Call always yields a value.Value. Control-flow analysis may have
 	// evolved an implicit-any callee to a concrete return type at the call site,
@@ -2482,7 +2489,12 @@ func (r *Renderer) producesBoxedValue(src frontend.Node) bool {
 	// checker has for it. Object.values of a Record<string, Row> mapped over is the
 	// everyday one: the checker calls the result a number[] and would drive
 	// value.ArrayValueOf over what is already a box.
-	return r.isBoxedChain(src) || r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src) || r.callOfOverloadedFunc(src) || r.isBoxedStaticFieldRead(src) || r.isDynamicValueLogical(src) || r.jsonStringifyUndefinedCall(src) || r.jsonStringifyOptCall(src) || r.dateToJSONCall(src) || r.callOfDynamicMember(src) || r.growingObjectRead(src) || r.isDynamicValueAdd(src) || r.callOfGrowingObjectFunc(src) || r.isBoxedArrayElemRead(src)
+	// An arithmetic or bitwise operator the checker gives no type lowers to the
+	// runtime operator, which answers a boxed value because whether the pair is a
+	// bigint pair or a number pair is only known once they are in hand. The checker
+	// has no type to drive a primitive box with, so without this the expression that
+	// is already a box would hand the program back.
+	return r.isBoxedChain(src) || r.isDynamicDescriptorRead(src) || r.isProxyRevocableCall(src) || r.isIterTerminalBoxedCall(src) || r.callOfOverloadedFunc(src) || r.isBoxedStaticFieldRead(src) || r.isDynamicValueLogical(src) || r.jsonStringifyUndefinedCall(src) || r.jsonStringifyOptCall(src) || r.dateToJSONCall(src) || r.callOfDynamicMember(src) || r.growingObjectRead(src) || r.isDynamicValueAdd(src) || r.isUntypedNumericBinary(src) || r.callOfGrowingObjectFunc(src) || r.isBoxedArrayElemRead(src)
 }
 
 // isBoxedArrayElemRead reports whether src is an element read a[i] off an evolving
