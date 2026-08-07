@@ -173,20 +173,24 @@ run();
 	}
 }
 
-// TestTaggedUnionArgumentIsBoolean guards against the boolean arm colliding with
-// the discriminant: a boolean value flowing into a number | boolean union wraps in
-// the boolean constructor and narrows back on its own tag.
-func TestTaggedUnionObjectArmHandsBack(t *testing.T) {
-	reason := renderProgramHandBack(t, `function pick(b: boolean): number | number[] {
+// TestTaggedUnionObjectArmLowers pins that an array member beside a primitive one
+// takes an arm of its own rather than the hand back it used to. Each return wraps in
+// its arm's constructor, so the two reach the caller through the one Go type the
+// signature names.
+func TestTaggedUnionObjectArmLowers(t *testing.T) {
+	source := renderProgram(t, `function pick(b: boolean): number | number[] {
   if (b) {
     return 1;
   }
   return [1, 2];
 }
-pick(true);
+console.log(typeof pick(true));
 `)
-	if !strings.Contains(reason, "union") && !strings.Contains(reason, "later slice") {
-		t.Fatalf("object-arm union hand-back reason = %q", reason)
+	if !strings.Contains(source, "type NumArrOrNum struct") {
+		t.Fatalf("the array member did not take an arm:\n%s", source)
+	}
+	if !strings.Contains(source, "NumArrOrNumOfNum(") || !strings.Contains(source, "NumArrOrNumOfNumArr(") {
+		t.Errorf("both returns did not wrap into their arms:\n%s", source)
 	}
 }
 

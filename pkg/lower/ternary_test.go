@@ -175,3 +175,33 @@ console.log(classify(0));
 		t.Fatalf("ternary program printed %q, want %q", got, want)
 	}
 }
+
+// TestTernaryArrayBranchTakesTheWholeTypesElement pins the branch reconciliation. The
+// IIFE has one Go result type, and an empty array literal is typed never[] by the
+// checker, so lowering it at its own type returned value.NewArray[value.Value] into a
+// func returning *value.Array[value.BStr]. The branch takes the contextual rebuild a
+// literal crossing into any other typed slot takes, with the ternary's own type as
+// the slot.
+func TestTernaryArrayBranchTakesTheWholeTypesElement(t *testing.T) {
+	src := "function pick(c: boolean): string[] { return c ? [\"a\"] : []; }\nconsole.log(pick(true).length);\n"
+	source := renderProgram(t, src)
+	if strings.Contains(source, "value.NewArray[value.Value]") {
+		t.Errorf("the empty branch kept its never[] element:\n%s", source)
+	}
+	if !strings.Contains(source, "value.NewArray[value.BStr]()") {
+		t.Errorf("the empty branch did not take the ternary's element type:\n%s", source)
+	}
+}
+
+// TestTernaryArrayBranchesRunAtOneElementType builds and runs the shape node's own
+// test harness opens with, a platform ternary between two array literals whose
+// element is a union, and reads the length back from either side.
+func TestTernaryArrayBranchesRunAtOneElementType(t *testing.T) {
+	skipIfShort(t)
+	src := "const win = false;\n" +
+		"const pwdCommand: (string | string[])[] = win ? [\"cmd.exe\", [\"/d\", \"/c\", \"cd\"]] : [\"pwd\", []];\n" +
+		"console.log(pwdCommand.length, typeof pwdCommand[0], typeof pwdCommand[1]);\n"
+	if got, want := runProgramGo(t, src), "2 string object\n"; got != want {
+		t.Fatalf("platform ternary run mismatch:\n got %q\nwant %q", got, want)
+	}
+}

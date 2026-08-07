@@ -93,21 +93,24 @@ func (r *Renderer) typeofExpr(n frontend.Node) (ast.Expr, error) {
 		}
 	}
 
-	// typeof over a tagged-sum union of primitives spans more than one tag, so it
-	// cannot fold to a constant, but the union value carries its tag, and each arm's
-	// tag pins its typeof string. The operand is evaluated once and asked for that
-	// string through the union's TypeOf method, so a side-effecting operand keeps its
-	// effect rather than needing the repeatable-operand gate the fold takes. An object
-	// or mixed union arm has no primitive typeof tag, so it stays on the handback.
+	// typeof over a tagged-sum union spans more than one tag, so it cannot fold to a
+	// constant, but the union value carries its tag, and each arm's tag pins its typeof
+	// string. The operand is evaluated once and asked for that string through the union's
+	// TypeOf method, so a side-effecting operand keeps its effect rather than needing the
+	// repeatable-operand gate the fold takes. An object arm answers "object", or
+	// "function" when its member is callable, which is what JavaScript reports for it, so
+	// a mixed union answers as truly as an all-primitive one. An arm with no typeof
+	// string at all would answer the empty string, so a union carrying one stays on the
+	// handback.
 	if info, ok := r.unionInfoOf(r.prog.TypeAt(operand)); ok {
-		allPrim := true
+		allTagged := true
 		for _, a := range info.arms {
-			if a.isObject {
-				allPrim = false
+			if a.typeof == "" {
+				allTagged = false
 				break
 			}
 		}
-		if allPrim {
+		if allTagged {
 			e, err := r.lowerExpr(operand)
 			if err != nil {
 				return nil, err
