@@ -1,0 +1,37 @@
+== stdout:
+big-plus 12n
+big-minus 0n
+big-times 36n
+big-div 1n
+big-rem 0n
+big-pow 46656n
+num-plus 12
+num-minus 0
+num-times 36
+num-div 1
+num-rem 0
+num-pow 46656
+mixed-times threw Cannot mix BigInt and other types, use explicit conversions
+mixed-plus threw Cannot mix BigInt and other types, use explicit conversions
+big-and 6n
+big-or 6n
+big-xor 0n
+big-shl 384n
+big-shr 0n
+big-ushr threw BigInts have no unsigned right shift, use >> instead
+num-and 6
+num-shl 384
+num-ushr 0
+bind-prod 36n
+bind-typeof bigint
+bind-sum 12
+bind-sum-typeof number
+chain 30n
+fn-big 12n
+fn-num 12
+fn-typeof bigint
+timeout-num 6
+timeout-big 6n
+
+== exit:
+0

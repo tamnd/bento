@@ -1590,6 +1590,18 @@ func (r *Renderer) combineBinary(node frontend.Node, opText string, left, right 
 		return expr, nil
 	}
 
+	// An arithmetic or bitwise operator the checker gives no type is one whose
+	// operands do not agree on a numeric kind, a bigint against a number or against
+	// an any. Which kind the pair turns out to be is a runtime fact, so the operator
+	// lowers to the runtime's own version of itself and answers a boxed value. It
+	// routes before the dynamic paths below, which coerce through ToNumber and so
+	// throw on the bigint the expression exists to carry.
+	if expr, handled, err := r.untypedNumericBinary(node); err != nil {
+		return nil, err
+	} else if handled {
+		return expr, nil
+	}
+
 	if r.combineIsDynamic(opText, left, right) {
 		l, err := r.boxOperand(left)
 		if err != nil {

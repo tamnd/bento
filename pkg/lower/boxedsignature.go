@@ -1252,7 +1252,17 @@ func (r *Renderer) returnsBoxedIn(owner *classInfo, fn frontend.Node) bool {
 // checker types number, string, or boolean is left alone for the same reason: the
 // return coercion brings the box down to the Go primitive, which is what a read off a
 // box does anyway.
+//
+// A return the checker gives no type at all joins the boxable slots. That is what it
+// answers for a body whose only return is an expression it could not type, an
+// arithmetic operator over operands that disagree on a numeric kind being the one
+// that arises in practice. A Go function needs some result type, and the box is the
+// only one available; a body with no returning path never reaches here, since
+// funcReturnsBoxedChain asks for a `return` that hands one back.
 func (r *Renderer) boxableReturnSlot(t frontend.Type) bool {
+	if t.Flags == 0 {
+		return true
+	}
 	return r.boxableParamSlot(frontend.Param{Type: t})
 }
 
@@ -1295,7 +1305,10 @@ func (r *Renderer) funcReturnsBoxedChain(fn frontend.Node) bool {
 func (r *Renderer) returnHandsBackABox(x frontend.Node) bool {
 	x = r.unwrapParens(x)
 	if x.Kind() != frontend.NodeConditionalExpression {
-		return r.isBoxedChain(x)
+		// An arithmetic or bitwise operator the checker gives no type lowers to the
+		// runtime operator, whose result is a box, so a function returning one hands a
+		// box back the same as any other boxed chain does.
+		return r.isBoxedChain(x) || r.isUntypedNumericBinary(x)
 	}
 	arms := r.prog.Children(x)
 	if len(arms) < 3 {
