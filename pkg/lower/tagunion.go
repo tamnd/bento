@@ -872,6 +872,44 @@ func (r *Renderer) narrowedUnionRead(name string, n frontend.Node) (ast.Expr, bo
 	return nil, false
 }
 
+// narrowedUnionFieldRead lowers a read of a merged object union's field that the
+// checker narrowed to one arm into a read of that arm's slot, the field-level twin of
+// narrowedUnionRead. The merge puts a tagged sum in the field, holding whatever the
+// union's members carry at that key, and narrowing the receiver to one member narrows
+// every read off it, so `u.a` inside a branch that proved `u` is the number-carrying
+// member is typed number while the field still holds the sum. Selecting the arm is
+// what makes the read the float64 that type says it is.
+//
+// It answers false when the field is not a tagged sum, when the read is still typed at
+// the whole union, and when the narrowed type is not exactly one arm, so every other
+// read keeps the field it already had.
+func (r *Renderer) narrowedUnionFieldRead(field ast.Expr, objType frontend.Type, prop string, n frontend.Node) (ast.Expr, bool) {
+	if !r.isMergedObjectUnion(objType) {
+		return nil, false
+	}
+	sp, ok := r.shapeProp(objType, prop)
+	if !ok {
+		return nil, false
+	}
+	info, ok := r.unionInfoOrIntern(sp.Type)
+	if !ok {
+		return nil, false
+	}
+	arm, ok := info.armForFlags(r.primitiveFlags(n))
+	if !ok {
+		return nil, false
+	}
+	if arm.tagOnly {
+		// The read narrowed to a sentinel arm, undefined or null, which holds no field:
+		// it reads as the singleton that arm stands for, the same value the bare literal
+		// lowers to. The receiver is dropped, which is sound because a struct field read
+		// has no effect of its own.
+		r.requireImport(valuePkg)
+		return sel("value", arm.singletonName()), true
+	}
+	return &ast.SelectorExpr{X: field, Sel: ident(arm.field)}, true
+}
+
 // typeofUnionCompare lowers a typeof test on a tagged-sum union against a string
 // literal to a discriminant compare, the typeof-narrowing of section 9: typeof x
 // === "string" on a string | number lowers to comparing the tag rather than

@@ -663,8 +663,18 @@ func (r *Renderer) propertyRead(n, obj, nameNode frontend.Node) (ast.Expr, error
 	// type renderer use, so a read and the value it reads agree on the field. A
 	// shape that does not lower (an optional property, say) hands back through
 	// internStruct rather than reading a field that was never declared.
+	// A union of like-keyed object shapes lowers to the one struct their merge
+	// describes (mergedObjectUnion), so it is a fixed shape here too and its fields
+	// are read the same way. The checker types this read as the union of what the
+	// members hold at the key, which is exactly what the merged field carries.
+	// The receiver of a merged union is read at the union, not at whatever the checker
+	// narrowed it to here: the Go value in that slot is the merged struct for the whole
+	// of its life, so the narrowed member shape would name a struct the value never had.
 	objType := r.prog.TypeAt(obj)
-	if objType.Flags&frontend.TypeObject != 0 {
+	if ut, ok := r.mergedUnionOf(obj); ok {
+		objType = ut
+	}
+	if objType.Flags&frontend.TypeObject != 0 || r.isMergedObjectUnion(objType) {
 		if _, isArray := r.prog.ElementType(objType); !isArray {
 			// A fixed shape interns to a Go struct that carries exactly its declared
 			// fields, so a read of a property the shape does not declare is a provable
@@ -706,6 +716,15 @@ func (r *Renderer) propertyRead(n, obj, nameNode frontend.Node) (ast.Expr, error
 			// path, no Get.
 			if sp, ok := r.shapeProp(objType, prop); ok && sp.Optional && r.isOptionalType(sp.Type) && !r.isOptionalType(r.prog.TypeAt(n)) {
 				return &ast.CallExpr{Fun: &ast.SelectorExpr{X: field, Sel: ident("Get")}}, nil
+			}
+			// A field of a merged object union holds the tagged sum of what the members
+			// carry at that key. A read the checker narrowed to one of those arms, which is
+			// what it does the moment the receiver itself narrows to a member, selects that
+			// arm's field, the same unwrap narrowedUnionRead performs for a union-typed
+			// local. Without it the read would hand the whole sum to a sink expecting the
+			// arm's own Go type. A read still typed at the union keeps the sum.
+			if e, ok := r.narrowedUnionFieldRead(field, objType, prop, n); ok {
+				return e, nil
 			}
 			return field, nil
 		}

@@ -130,15 +130,43 @@ func (r *Renderer) shapeProp(t frontend.Type, name string) (frontend.Property, b
 // literal must build at the declared shape, the same contextual typing
 // TypeScript applies to it. Every other literal keeps building at its own
 // type, unchanged behavior.
+//
+// The second case is a union of like-keyed object shapes, which lowers to the one
+// struct their merge describes (mergedObjectUnion). The literal's own type is a
+// single member of that union, which interns a different struct than the slot, so
+// the same contextual build applies: the literal has to be built at the merged
+// shape or the value will not fit the slot it is going into.
 func (r *Renderer) contextualObjectShape(declared frontend.Type) (shape frontend.Type, wrap, ok bool) {
 	shape = declared
 	if inner, isOpt := r.optionalInner(r.prog.UnionMembers(declared)); isOpt {
 		shape, wrap = inner, true
 	}
-	if !r.isPlainShape(shape) || !r.shapeHasOptional(shape) {
+	if r.isMergedObjectUnion(shape) {
+		return shape, wrap, true
+	}
+	if !r.isPlainShape(shape) {
+		return frontend.Type{}, false, false
+	}
+	if !r.shapeHasOptional(shape) && !r.shapeHasMergedUnionProp(shape) {
 		return frontend.Type{}, false, false
 	}
 	return shape, wrap, true
+}
+
+// shapeHasMergedUnionProp reports whether a shape declares a property whose type is a
+// union of like-keyed object shapes. Such a property lowers to the merged struct, which
+// a literal writing that member would otherwise fill with the member struct its own
+// fresh type interns, so the literal has to build at the declared shape the way an
+// optional property already makes it. Only the shape's own properties are asked: a
+// literal nested one level down builds at its field's declared shape through
+// objectLiteralContextualFill, which carries the same question deeper on its own.
+func (r *Renderer) shapeHasMergedUnionProp(shape frontend.Type) bool {
+	for _, p := range r.prog.Properties(shape) {
+		if r.isMergedObjectUnion(p.Type) {
+			return true
+		}
+	}
+	return false
 }
 
 // someWrap wraps a present value in value.Some at the given element type, the

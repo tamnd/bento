@@ -1289,6 +1289,9 @@ func (r *Renderer) objectLiteralContextualFill(n frontend.Node, shape frontend.T
 		switch len(kids) {
 		case 1:
 			if strings.HasPrefix(strings.TrimSpace(r.prog.Text(p)), "...") {
+				if r.isMergedObjectUnion(shape) {
+					return nil, &NotYetLowerable{Reason: "object spread into a like-keyed object union is a later slice"}
+				}
 				return nil, &NotYetLowerable{Reason: "object spread into a shape with an optional property is a later slice"}
 			}
 			keyNode, valNode = kids[0], kids[0]
@@ -1388,12 +1391,16 @@ func (r *Renderer) objectLiteralContextualFill(n frontend.Node, shape frontend.T
 			continue
 		}
 		var val ast.Expr
-		if valNode.Kind() == frontend.NodeObjectLiteralExpression && haveFieldShape && r.isPlainShape(fieldShape) {
+		if valNode.Kind() == frontend.NodeObjectLiteralExpression && haveFieldShape &&
+			(r.isPlainShape(fieldShape) || r.isMergedObjectUnion(fieldShape)) {
 			// A nested object literal builds at the field's declared shape, not its own
 			// fresh required shape, so an inner optional property interns the same
 			// struct the field type does and the value lands in the field without a
 			// shape mismatch. A build under an assertion carries the zero-fill down, so a
-			// nested empty literal the assertion covers zero-fills too.
+			// nested empty literal the assertion covers zero-fills too. A field declared
+			// as a union of like-keyed object shapes is a shape here too: it lowers to the
+			// one struct that union merges to, so the nested literal has to build at the
+			// union rather than at the member it looks like on its own.
 			val, err = r.objectLiteralContextualFill(valNode, fieldShape, zeroFill)
 		} else {
 			val, err = r.lowerExpr(valNode)
@@ -1408,6 +1415,21 @@ func (r *Renderer) objectLiteralContextualFill(n frontend.Node, shape frontend.T
 		}
 		if err != nil {
 			return nil, err
+		}
+		// A member filling a required tagged-sum field names its arm, the same
+		// coercion the optional case below applies through optionalUnionInfo. It is
+		// the merged object union that raises this: the field's type is the union of
+		// what the members hold at that key, so a literal writing `two: 2n` into a
+		// bigint-or-number field has to say which arm the 2n is.
+		// A field that is itself a merged object union is not a tagged sum and takes no
+		// arm name: it lowered to a struct and the member above built at it.
+		if hasProp && !sp.Optional && !r.isDynamicType(sp.Type) && !r.isMergedObjectUnion(sp.Type) {
+			if _, isUnion := r.unionInfoOrIntern(sp.Type); isUnion {
+				val, err = r.coerceToType(val, valNode, sp.Type)
+				if err != nil {
+					return nil, err
+				}
+			}
 		}
 		// A member filling an optional field is wrapped in value.Some so it lands in
 		// the value.Opt slot the field became, unless the member is already an optional
@@ -1504,6 +1526,15 @@ func (r *Renderer) objectSpread(srcNode frontend.Node, target frontend.Type, set
 	}
 	if _, isArray := r.prog.ElementType(srcType); isArray {
 		return &NotYetLowerable{Reason: "object spread of an array is a later slice"}
+	}
+	// A source that is a union of like-keyed object shapes holds each field at the
+	// union of what its members carry, so a field read off it is the merged field, not
+	// the arm's own type. The checker types the spreading literal at one member, so
+	// copying field by field would drop the merged field into a slot of one arm's type.
+	// A target that is the same merged union takes the copy without a change of type,
+	// which is why only the crossing hands back.
+	if r.mergedUnionSlot(srcNode) && !r.isMergedObjectUnion(target) {
+		return &NotYetLowerable{Reason: "object spread of a like-keyed object union into a slot of one member shape is a later slice"}
 	}
 	// internStruct confirms the source lowers to a struct and registers it, so the
 	// field reads below select declared fields; a source shape that does not lower

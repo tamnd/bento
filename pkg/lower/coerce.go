@@ -3046,6 +3046,95 @@ func (r *Renderer) optArrayLiteralContextual(node frontend.Node, target frontend
 	return wrapped, true, nil
 }
 
+// mergedArrayLiteralContextual re-emits a non-empty array literal flowing into a slot
+// whose element type is a union of like-keyed object shapes, at that merged element
+// type. The checker types [{ a: 1, b: "y" }] by its own contents, an array of the one
+// member shape, which a slot spelled U[] rejects at go build, because the merged union
+// interns its own struct and Go's array header is invariant in its element type. The
+// contextual element type lives on the slot rather than the literal, so like
+// dynArrayLiteralContextual the rebuild sits at the coercion boundary: each element is
+// built at the merged shape and the literal re-emits as value.NewArray over it.
+//
+// An element that is not an object literal has nothing to rebuild, the same bar
+// conditionalMergedObject sets: converting a value already built at a member shape
+// would mean copying it field by field, and a copy is a different object from the one
+// the source named, so the whole rebuild declines and the ordinary coercion hands back.
+func (r *Renderer) mergedArrayLiteralContextual(node frontend.Node, target frontend.Type) (ast.Expr, bool, error) {
+	if node == nil || node.Kind() != frontend.NodeArrayLiteralExpression {
+		return nil, false, nil
+	}
+	kids := r.prog.Children(node)
+	if len(kids) == 0 {
+		return nil, false, nil
+	}
+	arrType := target
+	wrapSome := false
+	if inner, ok := r.optionalInner(r.prog.UnionMembers(target)); ok {
+		arrType, wrapSome = inner, true
+	}
+	tgtElem, ok := r.prog.ElementType(arrType)
+	if !ok || !r.isMergedObjectUnion(tgtElem) {
+		return nil, false, nil
+	}
+	// There is no early-out for a literal the checker already typed at the union, the
+	// way dynArrayLiteralContextual skips an already-boxed literal. The checker types
+	// [{ a: 1, b: "y" }, { a: "z", b: 2 }] with the union of the two element shapes, so
+	// the source element type is a merged union on its own and the plain path still
+	// builds each element at its own member. Rebuilding is idempotent here in any case,
+	// since each element is built from its literal node rather than adapted from an
+	// already-lowered value.
+	elemGo, err := r.typeExpr(tgtElem)
+	if err != nil {
+		return nil, false, err
+	}
+	elems := make([]ast.Expr, 0, len(kids))
+	for _, k := range kids {
+		if r.unwrapParens(k).Kind() != frontend.NodeObjectLiteralExpression {
+			return nil, false, nil
+		}
+		e, err := r.objectLiteralContextual(r.unwrapParens(k), tgtElem)
+		if err != nil {
+			return nil, false, err
+		}
+		elems = append(elems, e)
+	}
+	r.requireImport(valuePkg)
+	arr := &ast.CallExpr{Fun: index(sel("value", "NewArray"), elemGo), Args: elems}
+	if !wrapSome {
+		return arr, true, nil
+	}
+	wrapped, err := r.someWrap(arr, arrType)
+	if err != nil {
+		return nil, false, err
+	}
+	return wrapped, true, nil
+}
+
+// mergedObjectLiteralContextual rebuilds an object literal flowing into a slot whose
+// type is a union of like-keyed object shapes, at the merged shape that union lowers
+// to. The literal's own type is one member of the union, which interns its own struct,
+// so the value would not fit the slot; the contextual build gives it the slot's struct
+// the same way contextualObjectShape does for a binding, a return, and an argument.
+// This is the assignment end of that, `u = { a: "z", b: 2 }` against a `let u: U`,
+// which reaches the coercion bridge rather than any of those three.
+func (r *Renderer) mergedObjectLiteralContextual(node frontend.Node, target frontend.Type) (ast.Expr, bool, error) {
+	if node == nil {
+		return nil, false, nil
+	}
+	lit := r.unwrapParens(node)
+	if lit.Kind() != frontend.NodeObjectLiteralExpression {
+		return nil, false, nil
+	}
+	if !r.isMergedObjectUnion(target) {
+		return nil, false, nil
+	}
+	e, err := r.objectLiteralContextual(lit, target)
+	if err != nil {
+		return nil, false, err
+	}
+	return e, true, nil
+}
+
 // assertionOperand returns the value expression a type assertion wraps, seeing
 // through the grouping parentheses the source carries. `arr as T` leads with the
 // value, `<T>arr` leads with the type, so the operand is the first child of an as
@@ -3812,6 +3901,16 @@ func (r *Renderer) coerceReturn(expr ast.Expr, srcNode frontend.Node) (ast.Expr,
 	} else if ok {
 		return opt, nil
 	}
+	if merged, ok, err := r.mergedArrayLiteralContextual(srcNode, r.retType); err != nil {
+		return nil, err
+	} else if ok {
+		return merged, nil
+	}
+	if merged, ok, err := r.mergedObjectLiteralContextual(srcNode, r.retType); err != nil {
+		return nil, err
+	} else if ok {
+		return merged, nil
+	}
 	if fn, ok, err := r.coerceFuncValue(expr, srcNode, r.retType); err != nil {
 		return nil, err
 	} else if ok {
@@ -3895,6 +3994,16 @@ func (r *Renderer) coerceToTarget(expr ast.Expr, src, target frontend.Node) (ast
 		return nil, err
 	} else if ok {
 		return opt, nil
+	}
+	if merged, ok, err := r.mergedArrayLiteralContextual(src, r.targetType(target)); err != nil {
+		return nil, err
+	} else if ok {
+		return merged, nil
+	}
+	if merged, ok, err := r.mergedObjectLiteralContextual(src, r.targetType(target)); err != nil {
+		return nil, err
+	} else if ok {
+		return merged, nil
 	}
 	if fn, ok, err := r.coerceFuncValue(expr, src, r.targetType(target)); err != nil {
 		return nil, err
