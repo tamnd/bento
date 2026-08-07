@@ -1719,6 +1719,13 @@ func (r *Renderer) functionValueCallee(calleeNode frontend.Node) (ast.Expr, erro
 // receiver, or an unmapped string method, is its own later slice.
 func (r *Renderer) methodCall(callee frontend.Node, argNodes []frontend.Node) (ast.Expr, error) {
 	kids := r.prog.Children(callee)
+	// An optional method call a?.m() has the ?. token between the receiver and the
+	// method name, so the callee exposes three children. Nothing below reads the token,
+	// and telling the reader the callee was malformed names the wrong thing: the callee
+	// is fine, the form is the part not lowered yet.
+	if len(kids) == 3 && r.isQuestionDotToken(kids[1]) {
+		return nil, r.notLowerable(callee, "an optional method call a?.m() is a later slice")
+	}
 	if len(kids) != 2 {
 		return nil, &NotYetLowerable{Reason: "method callee did not expose a receiver and a method name"}
 	}

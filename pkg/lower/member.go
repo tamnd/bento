@@ -950,11 +950,26 @@ func (r *Renderer) settledChainLink(n, recvNode frontend.Node) (ast.Expr, bool, 
 	return &ast.CallExpr{Fun: sel("value", "MissingProperty"), Args: []ast.Expr{recv}}, true, nil
 }
 
+// chainReceiverBoxed reports whether an optional link's receiver lowers to a box, which
+// is what decides the link: a box carries null and undefined among its kinds, so the
+// short circuit is a nullish test the runtime performs and the read is the same dynamic
+// Get every other read off a box takes.
+//
+// It asks the two questions separately because they answer about different things.
+// isBoxedChain walks the receiver's own spelling, a chain of reads whose root the
+// boxed-signature pass gave a value slot. isDynamic asks whether this expression lowers
+// to a box whatever the checker types it, which is how re.exec(s) is recognized: the
+// checker types it RegExpExecArray | null while the runtime answers one value.Value,
+// and that call is the receiver in the line that stops a third of the compat suite.
+func (r *Renderer) chainReceiverBoxed(recvNode frontend.Node) bool {
+	return r.isBoxedChain(recvNode) || r.isDynamic(recvNode)
+}
+
 // chainReceiverSettledNullish reports whether the checker narrowed an optional link's
 // receiver to nothing but null and undefined, so the link always short-circuits. A box
 // is excluded because its kind is a run-time fact whatever the checker says.
 func (r *Renderer) chainReceiverSettledNullish(recvNode frontend.Node) bool {
-	if r.isBoxedChain(recvNode) {
+	if r.chainReceiverBoxed(recvNode) {
 		return false
 	}
 	t := r.prog.TypeAt(recvNode)
@@ -971,7 +986,7 @@ func (r *Renderer) chainReceiverSettledNullish(recvNode frontend.Node) bool {
 // checker has already settled. A box is excluded for the same reason as above, and so
 // are any and unknown, which say nothing either way.
 func (r *Renderer) chainReceiverNeverNullish(recvNode frontend.Node) bool {
-	if r.isBoxedChain(recvNode) {
+	if r.chainReceiverBoxed(recvNode) {
 		return false
 	}
 	const unsettled = frontend.TypeNull | frontend.TypeUndefined | frontend.TypeUnion |
@@ -991,7 +1006,7 @@ func (r *Renderer) optionalChainProp(recvNode frontend.Node, prop string) (ast.E
 	// first because the checker still types the receiver by its shape, `{ b: number } |
 	// undefined`, and the Opt path below would map over a value.Value that is not an
 	// Opt, which is Go that does not compile rather than a hand-back.
-	if r.isBoxedChain(recvNode) || r.isDynamicType(r.prog.TypeAt(recvNode)) {
+	if r.chainReceiverBoxed(recvNode) {
 		recvExpr, err := r.lowerExpr(recvNode)
 		if err != nil {
 			return nil, err
@@ -1113,7 +1128,7 @@ func (r *Renderer) optionalElementRead(n, recvNode, idxNode frontend.Node) (ast.
 	// constant-key fold below because the checker still types the receiver by its shape
 	// while the lowerer holds a value.Value, and the Opt path would map over something
 	// that is not an Opt, which is Go that does not compile rather than a hand-back.
-	if r.isBoxedChain(recvNode) || r.isDynamicType(r.prog.TypeAt(recvNode)) {
+	if r.chainReceiverBoxed(recvNode) {
 		return r.optionalBoxedElementRead(recvNode, idxNode)
 	}
 	// o?.["k"] with a compile-time-constant string key reads the member "k", so it takes

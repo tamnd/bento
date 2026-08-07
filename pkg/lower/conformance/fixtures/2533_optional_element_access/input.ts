@@ -12,6 +12,14 @@ console.log(m?.[1]);
 const none = /zz/.exec("xaby");
 console.log(none?.[1]);
 
+// The same read with no binding in between, which is how the line that stops a third of
+// the compat suite is written. The checker types the call RegExpExecArray | null while
+// the runtime answers one boxed value, so what decides the read is what the call lowers
+// to rather than what the checker calls it.
+const line = "Hardware: BCM2835";
+console.log(/Hardware\s*:\s*(.*)/.exec(line)?.[1] === "BCM2835");
+console.log(/Nothing\s*:\s*(.*)/.exec(line)?.[1] === "BCM2835");
+
 let arr: number[] | undefined = [1, 2];
 console.log(arr?.[1]);
 arr = undefined;

@@ -1,6 +1,8 @@
 == stdout:
 b
 undefined
+true
+false
 2
 undefined
 h
