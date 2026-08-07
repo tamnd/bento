@@ -2839,6 +2839,8 @@ func kindName(k frontend.NodeKind) string {
 		return "string literal"
 	case frontend.NodeBinaryExpression:
 		return "binary expression"
+	case frontend.NodeSpreadElement:
+		return "spread element"
 	default:
 		return "kind#" + strconv.Itoa(int(k))
 	}
