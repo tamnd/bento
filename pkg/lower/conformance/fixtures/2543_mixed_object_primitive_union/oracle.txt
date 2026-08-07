@@ -1,0 +1,15 @@
+== stdout:
+string/3
+array/2
+[abc] [a,b] []
+false true true true
+function string
+string a
+object b,c
+object 
+2 string object
+string object
+7 6
+
+== exit:
+0

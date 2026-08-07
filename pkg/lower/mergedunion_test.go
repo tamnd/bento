@@ -100,29 +100,32 @@ console.log(s.kind);`)
 	}
 }
 
-// TestUnionsThatAreNotLikeKeyedStayRefused pins the two shapes the merge declines.
-// A differing key set would grow a field on a value that does not have one, and the
+// TestUnionsThatAreNotLikeKeyedStayRefused pins the shape the merge declines. A
+// differing key set would grow a field on a value that does not have one, and the
 // `in` operator, which is how the language tells those apart, would then answer for a
 // key the shape carries but the value never set.
 func TestUnionsThatAreNotLikeKeyedStayRefused(t *testing.T) {
 	// The union has to be written where it is rendered rather than only annotated on a
 	// binding: a binding the checker narrows to one member never asks for the union's
 	// own Go type, so the annotation alone proves nothing either way.
-	cases := []struct{ name, src string }{
-		{"a differing key set", `type D = { a: number } | { a: number, b: string };
+	reason := renderProgramHandBack(t, `type D = { a: number } | { a: number, b: string };
 function f(x: boolean): D { if (x) { return { a: 1 }; } return { a: 1, b: "y" }; }
-console.log(f(true).a);`},
-		{"an object beside a primitive", `type P = { a: number } | number;
-function f(x: boolean): P { if (x) { return { a: 1 }; } return 2; }
-console.log(typeof f(true));`},
+console.log(f(true).a);`)
+	if reason == "" {
+		t.Fatalf("want a hand back, got none")
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			reason := renderProgramHandBack(t, tc.src)
-			if reason == "" {
-				t.Fatalf("want a hand back, got none")
-			}
-		})
+}
+
+// TestAnObjectBesideAPrimitiveIsNotMerged pins the line between the two union
+// lowerings. The merge is for members that share a key set, so an object beside a
+// number has nothing to merge into; it takes the tagged sum with an object arm
+// instead, which is what keeps the two apart at run time.
+func TestAnObjectBesideAPrimitiveIsNotMerged(t *testing.T) {
+	got := renderProgram(t, `type P = { a: number } | number;
+function f(x: boolean): P { if (x) { return { a: 1 }; } return 2; }
+console.log(typeof f(true));`)
+	if !strings.Contains(got, "Tag uint8") {
+		t.Errorf("an object beside a primitive did not take the tagged sum:\n%s", got)
 	}
 }
 

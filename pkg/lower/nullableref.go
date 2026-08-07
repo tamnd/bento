@@ -135,11 +135,11 @@ func (r *Renderer) conditionalRef(cond, whenTrue ast.Expr, trueNode frontend.Nod
 	if err != nil {
 		return nil, false, nil
 	}
-	trueWrapped, _, err := r.wrapToUnion(whenTrue, trueNode, target)
+	trueWrapped, err := r.condBranchRef(whenTrue, trueNode, target)
 	if err != nil {
 		return nil, false, err
 	}
-	falseWrapped, _, err := r.wrapToUnion(whenFalse, falseNode, target)
+	falseWrapped, err := r.condBranchRef(whenFalse, falseNode, target)
 	if err != nil {
 		return nil, false, err
 	}
@@ -157,6 +157,25 @@ func (r *Renderer) conditionalRef(cond, whenTrue ast.Expr, trueNode frontend.Nod
 		}},
 	}
 	return &ast.CallExpr{Fun: lit}, true, nil
+}
+
+// condBranchRef fits one branch of a reference-typed ternary to the whole
+// expression's type. The IIFE has one Go result type and each branch was lowered at
+// its own, which for an array literal is the type its own contents give it: `cond ?
+// ["a"] : []` lowers the false branch as value.NewArray[value.Value], the never[] an
+// empty literal is, into a func returning *value.Array[value.BStr]. That is Go that
+// does not build, so the branch takes the same contextual rebuild an argument, a
+// return, and an assignment already give a literal crossing into a typed slot, with
+// the whole ternary's type as the slot. Every other branch goes on through
+// wrapToUnion, which turns a null literal into nil and leaves a real reference alone.
+func (r *Renderer) condBranchRef(lowered ast.Expr, node frontend.Node, target frontend.Type) (ast.Expr, error) {
+	if e, ok, err := r.arrayLiteralContextual(node, target); err != nil {
+		return nil, err
+	} else if ok {
+		return e, nil
+	}
+	wrapped, _, err := r.wrapToUnion(lowered, node, target)
+	return wrapped, err
 }
 
 // nullableRefNullCompare lowers an equality between a nullable reference and the

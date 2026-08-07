@@ -2667,12 +2667,12 @@ func TestNowConstruction(t *testing.T) {
 }
 
 // TestNowHandBacks checks the one boundary Temporal.Now does not carry: a time-zone argument
-// typed as the TimeZoneLike union (ZonedDateTime | string) itself. TimeZoneLike mixes an object
-// member and a string member, so the argument hands back in the shared union machinery before
-// nowCall runs, which is why the reason is the generic union one rather than a Now-specific
-// message. A bare string and a bare ZonedDateTime both resolve and lower, covered by
-// TestNowConstruction; nowCall's own not-a-string-or-ZonedDateTime branch stays defensive since
-// no type-valid TimeZoneLike reaches it.
+// typed as the TimeZoneLike union (ZonedDateTime | string) itself. The union lowers now that
+// one object member beside a primitive takes a tagged sum, so the argument reaches nowCall,
+// which resolves a zone from a string or a ZonedDateTime and has no reading for the sum
+// itself. That is where it hands back, and the reason names the argument rather than the
+// union. A bare string and a bare ZonedDateTime both resolve and lower, covered by
+// TestNowConstruction.
 func TestNowHandBacks(t *testing.T) {
 	cases := []struct {
 		name string
@@ -2682,12 +2682,12 @@ func TestNowHandBacks(t *testing.T) {
 		{
 			name: "union TimeZoneLike argument",
 			src:  "function at(tz: Temporal.TimeZoneLike) {\n  const z = Temporal.Now.zonedDateTimeISO(tz);\n  console.log(z.epochMilliseconds);\n}\nat(\"UTC\");",
-			want: "union mixing object and non-object members is a later slice",
+			want: "Temporal.Now.zonedDateTimeISO over a time-zone argument that is not a string or a Temporal.ZonedDateTime is a later slice",
 		},
 		{
 			name: "plainDateISO union argument",
 			src:  "function at(tz: Temporal.TimeZoneLike) {\n  const d = Temporal.Now.plainDateISO(tz);\n  console.log(d.year);\n}\nat(\"UTC\");",
-			want: "union mixing object and non-object members is a later slice",
+			want: "Temporal.Now.plainDateISO over a time-zone argument that is not a string or a Temporal.ZonedDateTime is a later slice",
 		},
 	}
 	for _, c := range cases {

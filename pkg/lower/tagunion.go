@@ -97,6 +97,13 @@ type unionArm struct {
 	disc      string          // the discriminant literal value an object arm narrows on ("circle")
 	memberSig string          // the structural key of an object arm's member type
 	props     map[string]bool // the property names an object arm's member carries, for in narrowing
+	// box is the func(T) value.Value that turns an object arm's field into a dynamic
+	// value, resolved once at intern time from the member type because an arm carries no
+	// type of its own after that. A primitive arm needs none: armValueExpr spells its box
+	// from its flag. It is nil for an object member the boxing paths have no box for, and
+	// the ToValue and ToString methods are then not emitted for the union at all, so a
+	// use that needs one hands back the way it did before the arm existed.
+	box ast.Expr
 }
 
 // unionInfo is the interned descriptor of one tagged-sum union: the Go type name,
@@ -454,6 +461,15 @@ func (r *Renderer) internObjectUnion(t frontend.Type, sig string) (*unionInfo, e
 	if obj, sentinels, ok := nullableObjectMembers(members); ok && r.isPlainRecordType(obj) {
 		return r.internNullableObject(t, sig, obj, sentinels)
 	}
+	// One object member beside primitive members is the general mixed union, the shape
+	// `string | string[]` has and the one node's own test harness opens with. It runs
+	// after the nullable-object path above, which is its plain-record special case and
+	// owns the naming its goldens pin, and picks up everything that one declines: an
+	// array, a callable, a typed array, a class instance, each beside a primitive or a
+	// sentinel.
+	if info, ok, err := r.internMixedUnion(t, sig, members); err != nil || ok {
+		return info, err
+	}
 	for _, m := range members {
 		if m.Flags&frontend.TypeObject == 0 || m.Flags&frontend.TypeUnion != 0 {
 			return nil, &NotYetLowerable{Flags: t.Flags, Reason: "union mixing object and non-object members is a later slice"}
@@ -480,7 +496,7 @@ func (r *Renderer) internObjectUnion(t frontend.Type, sig string) (*unionInfo, e
 			props[p.Name] = true
 		}
 		arms[i] = unionArm{
-			primArm:   primArm{field: unexportedName(suffix), suffix: suffix},
+			primArm:   primArm{field: unexportedName(suffix), suffix: suffix, typeof: "object"},
 			goType:    gt,
 			isObject:  true,
 			disc:      values[i],
@@ -629,6 +645,184 @@ func (r *Renderer) internNullableObject(t frontend.Type, sig string, obj fronten
 	r.unions = append(r.unions, info)
 	r.unionBySig[sig] = info
 	return info, nil
+}
+
+// internMixedUnion interns a union of one object member and one or more primitive
+// members as a tagged sum, the general form of the mixed object and non-object union.
+// The object member becomes a value arm holding whatever typeExpr gives its type, which
+// for every shape that reaches here is a pointer or a header the runtime already owns,
+// so the arm carries the same reference an ordinary binding of that type does and
+// identity survives the union. Each primitive member becomes the inline arm the
+// all-primitive union already gives it, so `string | string[]` is the str field and the
+// array field under one tag, narrowed by typeof the way `string | number` is.
+//
+// Exactly one object member is the bar. Two would need something to tell them apart at
+// run time, which is the discriminant the all-object path below looks for, and typeof
+// answers "object" for both. One object member needs nothing: it is the arm no typeof
+// string claims, so the tag alone selects it.
+//
+// It reports ok false for a union that is not this shape, leaving the caller's remaining
+// paths to claim it, and an error only when the object member's own type does not lower.
+func (r *Renderer) internMixedUnion(t frontend.Type, sig string, members []frontend.Type) (*unionInfo, bool, error) {
+	// A bare `T | undefined` is the optional, whose Go form is value.Opt[T] and whose
+	// every use goes through the optional pre-pass rather than any tagged sum. Taking it
+	// here would intern a sum nothing then references, so it declines the same way the
+	// nullable-object path above declines it, leaving `T | null` and `T | null |
+	// undefined` (which do force a sum) to come through.
+	if _, ok := r.optionalInner(members); ok {
+		return nil, false, nil
+	}
+	// A class or an array beside null is the nullable reference, whose Go form is the
+	// bare pointer nullableref.go hands out. It has a null of its own in nil, so a tag
+	// would be overhead, and worse it would break identity: a value of the union would
+	// stop being the same pointer an ordinary T binding holds. That path owns the shape
+	// end to end, so this one leaves it alone.
+	if _, ok := r.nullableRef(t); ok {
+		return nil, false, nil
+	}
+	var obj frontend.Type
+	objects := 0
+	var prims []primArm
+	seen := map[frontend.TypeFlags]bool{}
+	for _, m := range members {
+		if m.Flags&frontend.TypeObject != 0 && m.Flags&frontend.TypeUnion == 0 {
+			obj = m
+			objects++
+			continue
+		}
+		arm, ok := memberArm(m.Flags)
+		if !ok {
+			return nil, false, nil
+		}
+		// A repeat is the boolean true|false expansion collapsing back to one arm, or two
+		// literals of one base widening to theirs, the same collapse primUnionArms makes.
+		if seen[arm.flag] {
+			continue
+		}
+		seen[arm.flag] = true
+		prims = append(prims, arm)
+	}
+	if objects != 1 || len(prims) == 0 {
+		return nil, false, nil
+	}
+	objArm, err := r.objectUnionArm(obj, prims)
+	if err != nil {
+		return nil, false, err
+	}
+	arms := []unionArm{objArm}
+	for _, a := range prims {
+		if a.tagOnly {
+			// A sentinel arm has no payload, so it carries no Go type and no field; only
+			// its tag distinguishes it.
+			arms = append(arms, unionArm{primArm: a})
+			continue
+		}
+		gt, err := r.typeExpr(memberType(r.prog, t, a.flag))
+		if err != nil {
+			return nil, false, err
+		}
+		arms = append(arms, unionArm{primArm: a, goType: gt})
+	}
+	sortUnionArmsByRank(arms)
+	suffixes := make([]string, len(arms))
+	for i, a := range arms {
+		suffixes[i] = a.suffix
+	}
+	goName := r.decls.reserveName(strings.Join(suffixes, "Or"))
+	info := &unionInfo{goName: goName, tagType: goName + "Tag", arms: arms}
+	r.unions = append(r.unions, info)
+	r.unionBySig[sig] = info
+	return info, true, nil
+}
+
+// objectUnionArm builds the arm one object member of a mixed union contributes. The Go
+// type is the member's own, through typeExpr rather than renderObject, so an array
+// reaches value.Array and a class its instance pointer instead of being interned as a
+// struct of fields it does not have. The structural key and the property names come
+// along so a narrowed read and an `in` test find the arm the way they do on the
+// discriminated form, and the box is resolved here because the arm keeps no type to ask
+// later.
+//
+// The typeof string is the one JavaScript reports for the member, "function" for a
+// callable and "object" for everything else, which is what makes a typeof narrowing over
+// the union select the right arm.
+func (r *Renderer) objectUnionArm(obj frontend.Type, prims []primArm) (unionArm, error) {
+	gt, err := r.typeExpr(obj)
+	if err != nil {
+		return unionArm{}, err
+	}
+	typeofTag := "object"
+	if call, _ := r.prog.Signatures(obj); len(call) > 0 {
+		typeofTag = "function"
+	}
+	props := map[string]bool{}
+	for _, p := range r.prog.Properties(obj) {
+		props[p.Name] = true
+	}
+	name := r.objectArmName(obj, gt, prims)
+	return unionArm{
+		primArm:   primArm{field: unexportedName(name), suffix: name, typeof: typeofTag, rank: -1},
+		goType:    gt,
+		isObject:  true,
+		memberSig: structuralKey(r.prog, obj, map[int]int{}),
+		props:     props,
+		box:       r.dynValueBox(obj),
+	}, nil
+}
+
+// objectArmName picks the exported suffix a mixed union's object arm takes, which names
+// its tag constant, its constructor, and (lowercased) its field. A named Go struct or
+// class lends its own name, so a `Point | null` reads PointOrNull the way the
+// nullable-object form does; an array is named after its element arm, so `string |
+// string[]` reads StrArrOrStr; a callable is Fn and anything else Obj.
+//
+// A name that collides with one of the primitive suffixes already in the union would
+// give two arms one tag constant, so it falls back to Obj and then to ObjArm, which no
+// primitive arm spells.
+func (r *Renderer) objectArmName(obj frontend.Type, gt ast.Expr, prims []primArm) string {
+	name := "Obj"
+	switch {
+	case namedGoType(gt) != "":
+		name = namedGoType(gt)
+	case r.isTupleType(obj):
+		name = "Tup"
+	default:
+		if elem, ok := r.prog.ElementType(obj); ok {
+			name = "Arr"
+			if a, ok := memberArm(r.primitiveFlagsOfType(elem)); ok {
+				name = a.suffix + "Arr"
+			}
+		} else if call, _ := r.prog.Signatures(obj); len(call) > 0 {
+			name = "Fn"
+		}
+	}
+	for _, candidate := range []string{name, "Obj", "ObjArm"} {
+		taken := false
+		for _, p := range prims {
+			if p.suffix == candidate {
+				taken = true
+				break
+			}
+		}
+		if !taken {
+			return candidate
+		}
+	}
+	return "ObjArm"
+}
+
+// namedGoType returns the identifier a Go type expression names when it is a plain named
+// type or a pointer to one, the *ObjX a plain record interns to and the *Point a class
+// instance lowers to, and the empty string for a shape with no single name, such as the
+// value.Array header or a func type.
+func namedGoType(gt ast.Expr) string {
+	if star, ok := gt.(*ast.StarExpr); ok {
+		gt = star.X
+	}
+	if id, ok := gt.(*ast.Ident); ok {
+		return id.Name
+	}
+	return ""
 }
 
 // sortUnionArmsByRank orders interned arms by their fixed rank so the tag assignment
@@ -831,7 +1025,58 @@ func (r *Renderer) wrapToUnion(expr ast.Expr, src frontend.Node, target frontend
 			return &ast.CallExpr{Fun: ident(info.ctorName(arm)), Args: []ast.Expr{expr}}, true, nil
 		}
 	}
+	// A bare [] is typed never[], whose structural key names no arm however plainly it
+	// belongs to the array member: `["pwd", []]` against a (string | string[])[] slot
+	// is the shape. The union's own members say which member it meant, so the literal is
+	// re-spelled at that member's element type the way a bare [] crossing into an array
+	// slot already is, and the result takes that member's arm. It runs after the exact
+	// structural match above, so a literal that already names an arm keeps it.
+	if e, arm, ok, err := r.emptyArrayUnionArm(src, target, info); err != nil {
+		return nil, false, err
+	} else if ok {
+		return &ast.CallExpr{Fun: ident(info.ctorName(arm)), Args: []ast.Expr{e}}, true, nil
+	}
 	return nil, false, &NotYetLowerable{Reason: "constructing this union from its source type is a later slice"}
+}
+
+// emptyArrayUnionArm finds the arm a bare [] flowing into a union belongs to and
+// re-spells the literal at that arm's element type. An empty literal carries no
+// contextual type of its own, so the checker types it never[], which matches no arm
+// structurally; the union's members carry the answer instead, and exactly one of them
+// being an array is what makes the choice unambiguous. Two array members would need
+// the contextual type the literal does not have, so the search declines and the caller
+// hands back. It also declines for a source that is not an empty array literal, for a
+// union with no array member, and for an array member whose element does not lower.
+func (r *Renderer) emptyArrayUnionArm(src frontend.Node, target frontend.Type, info *unionInfo) (ast.Expr, unionArm, bool, error) {
+	if src == nil || src.Kind() != frontend.NodeArrayLiteralExpression || len(r.prog.Children(src)) != 0 {
+		return nil, unionArm{}, false, nil
+	}
+	if elem, ok := r.prog.ElementType(r.prog.TypeAt(src)); !ok || elem.Flags&frontend.TypeNever == 0 {
+		return nil, unionArm{}, false, nil
+	}
+	var found frontend.Type
+	arrays := 0
+	for _, m := range r.prog.UnionMembers(target) {
+		if m.Flags&frontend.TypeObject == 0 || m.Flags&frontend.TypeUnion != 0 {
+			continue
+		}
+		if _, ok := r.prog.ElementType(m); !ok {
+			continue
+		}
+		found, arrays = m, arrays+1
+	}
+	if arrays != 1 {
+		return nil, unionArm{}, false, nil
+	}
+	arm, ok := info.armByMemberSig(structuralKey(r.prog, found, map[int]int{}))
+	if !ok {
+		return nil, unionArm{}, false, nil
+	}
+	e, ok, err := r.emptyArrayContextual(src, found)
+	if err != nil || !ok {
+		return nil, unionArm{}, false, err
+	}
+	return e, arm, true, nil
 }
 
 // narrowedUnionRead lowers a reference to a union-typed local the checker narrowed
@@ -1451,7 +1696,11 @@ func (r *Renderer) renderUnions() []ast.Decl {
 		// value package, so the import is asked for here rather than left to whatever
 		// else the program happens to reach.
 		for _, a := range info.arms {
-			if a.tagOnly {
+			// An object arm's box names something out of the value package, the array
+			// header's ToValue or value.StructToValue, and a sentinel arm's JSONArm case
+			// names value.Null or value.Undefined. Either way the import is asked for here
+			// rather than left to whatever else the program happens to reach.
+			if a.tagOnly || (a.isObject && a.box != nil) {
 				r.requireImport(valuePkg)
 				break
 			}
@@ -1512,12 +1761,13 @@ func unionTypeOf(info *unionInfo) ast.Decl {
 
 // unionToBooleanSupported reports whether every arm of a union has a truthiness
 // unionToBoolean can spell: a value arm that is a number, string, or boolean, whose
-// inline ToBoolean truthyOfKind builds, or a tag-only sentinel (undefined, null),
-// which is always falsy. A bigint or object arm has no inline truthiness here yet, so
-// a union carrying one is not supported and its truthiness keeps the handback.
+// inline ToBoolean truthyOfKind builds, a tag-only sentinel (undefined, null), which is
+// always falsy, or an object arm, which is always truthy. A bigint arm has no inline
+// truthiness here yet, so a union carrying one is not supported and its truthiness keeps
+// the handback.
 func unionToBooleanSupported(info *unionInfo) bool {
 	for _, a := range info.arms {
-		if a.tagOnly {
+		if a.tagOnly || a.isObject {
 			continue
 		}
 		if _, ok := primitiveTruthyKind(a.flag); !ok {
@@ -1541,6 +1791,16 @@ func unionToBoolean(info *unionInfo) ast.Decl {
 	cases := make([]ast.Stmt, 0, len(info.arms))
 	for _, a := range info.arms {
 		if a.tagOnly {
+			continue
+		}
+		// Every object is truthy in JavaScript, empty array and all, so an object arm needs
+		// no test at all: reaching its tag is the answer. The one exception the spec allows,
+		// the [[IsHTMLDDA]] document.all, is a host object no compiled program can hold.
+		if a.isObject {
+			cases = append(cases, &ast.CaseClause{
+				List: []ast.Expr{ident(info.tagConst(a))},
+				Body: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{ident("true")}}},
+			})
 			continue
 		}
 		kind, _ := primitiveTruthyKind(a.flag)
@@ -1591,7 +1851,11 @@ func unionToStringSupported(info *unionInfo) bool {
 // reading the arm field off the receiver u: a number through value.NumberToString, a
 // string as itself (it is already a value.BStr), a boolean through value.BoolToString,
 // and a tag-only sentinel as the literal string JavaScript reports for it, "undefined"
-// or "null". It returns ok false for a bigint or object arm this slice does not spell.
+// or "null". An object arm goes through its box and value.ToString, which runs the
+// ToPrimitive the language runs: an array joins its elements with commas, a plain object
+// answers "[object Object]", and a member's own toString is honored. Spelling it inline
+// would mean reimplementing that per shape, and the box is already resolved. It returns
+// ok false for a bigint arm and for an object arm with no box.
 func armStringExpr(a unionArm) (ast.Expr, bool) {
 	if a.tagOnly {
 		lit := "undefined"
@@ -1601,6 +1865,14 @@ func armStringExpr(a unionArm) (ast.Expr, bool) {
 		return &ast.CallExpr{Fun: sel("value", "FromGoString"), Args: []ast.Expr{&ast.BasicLit{Kind: token.STRING, Value: strconv.Quote(lit)}}}, true
 	}
 	field := &ast.SelectorExpr{X: ident("u"), Sel: ident(a.field)}
+	if a.isObject {
+		if a.box == nil {
+			return nil, false
+		}
+		return &ast.CallExpr{Fun: sel("value", "ToString"), Args: []ast.Expr{
+			&ast.CallExpr{Fun: a.box, Args: []ast.Expr{field}},
+		}}, true
+	}
 	switch {
 	case a.flag&frontend.TypeNumber != 0:
 		return &ast.CallExpr{Fun: sel("value", "NumberToString"), Args: []ast.Expr{field}}, true
@@ -1666,12 +1938,11 @@ func (r *Renderer) unionValueBoxed(t frontend.Type) (*unionInfo, bool) {
 
 // unionToValueSupported reports whether every arm of a union has a box unionToValue
 // can spell: a value arm that is a number, string, boolean, or bigint, each of which
-// has a one-call box in the runtime, or a tag-only sentinel, whose box is the null or
-// undefined singleton. An object arm is not supported here. Its box would be
-// ObjectFromStruct over the arm's struct, which is right only when that struct carries
-// no function-typed member, and a union with an object arm hands back earlier anyway
-// for mixing object and non-object members, so there is no shape this would reach that
-// something else does not already refuse.
+// has a one-call box in the runtime, a tag-only sentinel, whose box is the null or
+// undefined singleton, or an object arm that resolved a boxer at intern time. An object
+// member the boxing paths have no box for leaves that boxer nil and makes the whole
+// union unboxable, so a use that needs one hands back rather than emit a call that
+// would not build.
 func unionToValueSupported(info *unionInfo) bool {
 	for _, a := range info.arms {
 		if a.tagOnly {
@@ -1688,8 +1959,10 @@ func unionToValueSupported(info *unionInfo) bool {
 // the arm field off the receiver u: a number through value.Number, a string through
 // value.StringValue, a boolean through value.Bool, a bigint through value.BigIntFromBig,
 // and a tag-only sentinel as the singleton JavaScript holds for it, value.Null or
-// value.Undefined. It returns ok false for an object arm, which unionToValueSupported
-// reads as the whole union being unboxable.
+// value.Undefined. An object arm applies the boxer it resolved at intern time, the same
+// func(T) value.Value an array element of that type would be boxed through. It returns
+// ok false for an object arm that found no boxer, which unionToValueSupported reads as
+// the whole union being unboxable.
 func armValueExpr(a unionArm) (ast.Expr, bool) {
 	if a.tagOnly {
 		if a.flag == frontend.TypeNull {
@@ -1698,6 +1971,12 @@ func armValueExpr(a unionArm) (ast.Expr, bool) {
 		return sel("value", "Undefined"), true
 	}
 	field := &ast.SelectorExpr{X: ident("u"), Sel: ident(a.field)}
+	if a.isObject {
+		if a.box == nil {
+			return nil, false
+		}
+		return &ast.CallExpr{Fun: a.box, Args: []ast.Expr{field}}, true
+	}
 	switch {
 	case a.flag&frontend.TypeNumber != 0:
 		return &ast.CallExpr{Fun: sel("value", "Number"), Args: []ast.Expr{field}}, true
