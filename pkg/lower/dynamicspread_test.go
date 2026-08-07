@@ -51,7 +51,7 @@ func TestDynamicSpreadKeepsArgumentOrder(t *testing.T) {
 	lead := strings.Index(source, "\"lead\"")
 	drain := strings.Index(source, "SpreadCallArgs")
 	trail := strings.Index(source, "\"trail\"")
-	if lead < 0 || drain < 0 || trail < 0 || !(lead < drain && drain < trail) {
+	if lead < 0 || drain < 0 || trail < 0 || lead >= drain || drain >= trail {
 		t.Errorf("the spliced arguments are out of source order (lead=%d drain=%d trail=%d):\n%s", lead, drain, trail, source)
 	}
 }
