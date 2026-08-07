@@ -1,0 +1,22 @@
+== stdout:
+add 5
+greet hi bob
+zero 0
+sum 6
+size-big big
+size-small small
+sign -1 1
+step-two 3
+step-one 11
+pair 8
+twice-chain 12
+say hello
+say-result undefined
+short NaN
+threw negative: -1
+check 7
+hint-string as-string
+hint-default as-default
+
+== exit:
+0

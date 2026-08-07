@@ -121,6 +121,18 @@ func Arg(args []Value, i int) Value {
 	return Undefined
 }
 
+// ArgOr is Arg with the parameter's own default standing in for a missing argument,
+// what a boxed callable needs when its parameter's Go slot is a static type with no
+// undefined to test. The default is taken for an argument the call omitted and for one
+// passed explicitly as undefined, which is the same rule JavaScript applies: a default
+// is initialized whenever the argument is undefined, not only when it is absent.
+func ArgOr(args []Value, i int, def Value) Value {
+	if v := Arg(args, i); v.kind != KindUndefined {
+		return v
+	}
+	return def
+}
+
 // NewObject returns an empty plain object value, the target JSON.parse builds a
 // key at a time as it reads an object literal.
 func NewObject() Value {

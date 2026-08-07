@@ -1,0 +1,27 @@
+== stdout:
+12 e d H 101 72
+4 8 8 4
+true true true true
+ello, World ell World ello, World Hel
+ell ell ell
+pad| pad  |   pad|
+HELLO, WORLD hello, world Hello, World Hello, World
+Hello, WorldHello, World Hello, World!? ***Hello, World Hello, World   |
+Hello, World true Hello, World
+4
+[ 'Hello', 'World' ] [ 'Hello' ] [ 'Hello', 'World' ]
+[ 'a', 'b', '', 'c' ]
+[ 'a', 'b' ] [ 'abc' ] []
+Hell0, World Hell0, W0rld
+Hell0, World Hell0, W0rld Hell0, W0rld
+Hello412, World
+Hell[4], W[8]rld
+Hell-o-2-12, World
+He<llo2>, World
+-a-b-
+[ 'o', index: 4, input: 'Hello, World', groups: undefined ] [ 'o', 'o' ] null [ 'W', index: 7, input: 'Hello, World', groups: undefined ]
+7 -1 4
+true
+
+== exit:
+0

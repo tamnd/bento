@@ -2150,6 +2150,33 @@ func (r *Renderer) selfDefaultingTail(sig frontend.Signature, paramNodes []front
 	return true
 }
 
+// wrapperFillableDefaults reports whether boxFuncToDynamic's wrapper can reconstruct
+// every default the function declares, which is what lets the lowered func be built with
+// plain fields and no defaults of its own. A default qualifies when it reads none of the
+// function's own parameters, since the wrapper evaluates it outside the body where those
+// names do not exist. A parameter whose slot is dynamic needs nothing here: it holds the
+// undefined an omitted argument binds and fills itself at body entry, the arrangement
+// paramBodyDefaults already serves.
+func (r *Renderer) wrapperFillableDefaults(sig frontend.Signature, paramNodes []frontend.Node) bool {
+	if len(paramNodes) != len(sig.Params) {
+		return false
+	}
+	for i := range sig.Params {
+		d, ok := r.paramDefaultNode(paramNodes, i)
+		if !ok {
+			continue
+		}
+		pkids := r.prog.Children(paramNodes[i])
+		if len(pkids) == 0 || r.dynamicDefaultSlot(pkids[0]) {
+			continue
+		}
+		if r.defaultReadsOwnParam(sig, d) {
+			return false
+		}
+	}
+	return true
+}
+
 // wrapperPassesArg reports whether boxFuncToDynamic's wrapper hands the boxed argument
 // at this position straight to the lowered func rather than coercing it to the static
 // type the signature names. A parameter the checker already calls any or unknown holds
@@ -2188,7 +2215,11 @@ func (r *Renderer) boxedFuncSrcNode(src frontend.Node) (frontend.Node, bool) {
 		return nil, false
 	}
 	switch src.Kind() {
-	case frontend.NodeFunctionDeclaration, frontend.NodeFunctionExpression, frontend.NodeArrowFunction:
+	case frontend.NodeFunctionDeclaration, frontend.NodeFunctionExpression, frontend.NodeArrowFunction,
+		frontend.NodeMethodDeclaration:
+		// An object literal's method is boxed from its own declaration node, since there
+		// is no reference to follow: boxMethodClosure hands this the method itself. It
+		// carries its parameter list the same way a function expression does.
 		return src, true
 	}
 	if sym, ok := r.prog.SymbolAt(src); ok {
@@ -2260,7 +2291,8 @@ func (r *Renderer) boxFuncToDynamic(expr ast.Expr, sig frontend.Signature, src f
 	// It resolves through a reference, since a function boxed by name arrives here as the
 	// identifier that reads it rather than as its declaration.
 	paramNodes := r.boxedFuncParamNodes(src)
-	if sig.MinArgs != len(sig.Params) && !r.selfDefaultingTail(sig, paramNodes) {
+	fillsDefaults := r.boxWrapperDefaults[src]
+	if sig.MinArgs != len(sig.Params) && !r.selfDefaultingTail(sig, paramNodes) && !fillsDefaults {
 		return nil, &NotYetLowerable{Reason: "boxing a function with an optional parameter into a dynamic value is a later slice"}
 	}
 	r.requireImport(valuePkg)
@@ -2273,6 +2305,26 @@ func (r *Renderer) boxFuncToDynamic(expr ast.Expr, sig frontend.Signature, src f
 			// a value.Value there, so no coercion is needed.
 			callArgs = append(callArgs, at)
 			continue
+		}
+		if fillsDefaults {
+			// The lowered func was built with a plain field for a defaulted parameter,
+			// because its static slot has no undefined to test at body entry, so the
+			// wrapper is the one that reconstructs the default. value.ArgOr takes the
+			// default for an argument the call omitted or passed as undefined, the same
+			// rule the language applies, and the coercion below lands it in the slot.
+			if d, ok := r.paramDefaultNode(paramNodes, i); ok {
+				lowered, lerr := r.lowerExpr(d)
+				if lerr != nil {
+					return nil, lerr
+				}
+				boxedDefault, berr := r.boxStaticResultToDynamic(lowered, r.prog.TypeAt(d))
+				if berr != nil {
+					return nil, berr
+				}
+				at = &ast.CallExpr{Fun: sel("value", "ArgOr"), Args: []ast.Expr{
+					ident(argsName), &ast.BasicLit{Kind: token.INT, Value: strconv.Itoa(i)}, boxedDefault,
+				}}
+			}
 		}
 		coerced, err := r.coerceDynamicToStaticFlags(at, p.Type.Flags)
 		if err != nil {
@@ -2413,7 +2465,14 @@ func (r *Renderer) boxStaticToDynamicFlags(expr ast.Expr, flags frontend.TypeFla
 // in practice, rows.map(r => ({ v: r.id })) and rows.flatMap(r => [r.id, r.id]), and
 // without them a callback that returns anything but a primitive handed the build back.
 func (r *Renderer) boxStaticResultToDynamic(expr ast.Expr, t frontend.Type) (ast.Expr, error) {
-	boxed, err := r.boxStaticToDynamicFlags(expr, t.Flags)
+	// The flags are read through the primitive fold rather than raw, so a result the
+	// checker spells as a closed literal union boxes as the primitive it observably is:
+	// a body whose returns are "big" and "small" has the return type "big" | "small",
+	// which lowers to a value.BStr and so boxes through StringValue, and one whose
+	// returns are 1 and 2 lowers to a float64 and boxes through Number. Without the fold
+	// a two-branch return, the most ordinary shape a method body has, handed back for
+	// want of a bit its lowered Go type already carries.
+	boxed, err := r.boxStaticToDynamicFlags(expr, r.primitiveFlagsOfType(t))
 	if err == nil {
 		return boxed, nil
 	}
@@ -3671,16 +3730,14 @@ func (r *Renderer) boxObjectLiteral(n frontend.Node) (ast.Expr, error) {
 
 // boxObjectMethodMember boxes one method member of an object literal onto obj, the
 // live object boxObjectLiteral is building, and returns the extended object
-// expression. A method lowers here only in the narrow shape the coercion items
-// need: a plain method (no get, set, async, generator, or private marker) with no
-// declared parameters, whose body is a single `return <expr>`, and whose returned
-// expression neither reads `this` nor names a parameter. The method becomes a
-// value.NewFunc closure that ignores its arguments and returns the boxed
-// expression, so a coercion protocol lookup finds a callable that yields the value.
+// expression. A method lowers here in the shape the object protocol calls: a plain
+// method (no get, set, async, generator, or private marker) whose body does not read
+// `this` or `arguments`. It becomes a value.NewFunc closure the runtime can call,
+// which takes its arguments off the boxed argument list the caller passes.
 // A named method writes its slot through Set; a well-known computed name like
 // [Symbol.toPrimitive] boxes the key and writes through SetKeyed, the same slot the
-// runtime's Symbol.toPrimitive probe reads. Any richer method (a parameter, a body
-// that is more than one return, a this reference) hands back to a later slice.
+// runtime's Symbol.toPrimitive probe reads. A method whose body needs a receiver
+// hands back to a later slice.
 func (r *Renderer) boxObjectMethodMember(obj ast.Expr, m frontend.Node) (ast.Expr, error) {
 	// Strip and reject modifiers. A childless leading unnamed node is a keyword
 	// marker (async, the generator star) or a private name (#m); each is a shape
@@ -3698,13 +3755,6 @@ func (r *Renderer) boxObjectMethodMember(obj ast.Expr, m frontend.Node) (ast.Exp
 		return nil, &NotYetLowerable{Reason: "boxing an object method without a name is a later slice"}
 	}
 	nameNode := kids[0]
-	// A declared parameter would need the receiver-bound argument binding this
-	// closure does not build, so a parameterless method is the only shape boxed.
-	for _, k := range kids {
-		if k.Kind() == frontend.NodeParameter {
-			return nil, &NotYetLowerable{Reason: "boxing an object method with a parameter is a later slice"}
-		}
-	}
 	fn, err := r.boxMethodClosure(m)
 	if err != nil {
 		return nil, err
@@ -3731,12 +3781,12 @@ func (r *Renderer) boxObjectMethodMember(obj ast.Expr, m frontend.Node) (ast.Exp
 	}, nil
 }
 
-// boxMethodClosure lowers a parameterless object method into a value.NewFunc
-// closure. A method whose body is a single `return <expr>` takes the compact
+// boxMethodClosure lowers an object method into a value.NewFunc closure. A
+// parameterless method whose body is a single `return <expr>` takes the compact
 // fast path: the closure ignores its arguments and returns the boxed return
 // expression, which is the shape the coercion methods (valueOf, toString,
-// [Symbol.toPrimitive]) take and the form the goldens pin. A richer body, one
-// with locals, control flow, or more than one return, lowers through the same
+// [Symbol.toPrimitive]) take and the form the goldens pin. Any other body, one
+// with parameters, locals, control flow, or more than one return, lowers through the same
 // block-body machinery an arrow or function expression uses and wraps in the
 // callable value box, so a method the object protocol calls behaves as the
 // direct call would. Either way the receiver scope is cleared before the body
@@ -3766,7 +3816,11 @@ func (r *Renderer) boxMethodClosure(m frontend.Node) (ast.Expr, error) {
 	defer func() { r.curClass, r.thisName = prevClass, prevThis }()
 
 	stmts := r.prog.Children(block)
-	if len(stmts) == 1 && stmts[0].Kind() == frontend.NodeReturnStatement {
+	// The compact form is only right for a method that names no parameter: its closure
+	// ignores the argument list it is handed, which is the whole saving, and a body that
+	// reads a parameter has nothing to read it from. A method with parameters takes the
+	// general path below, where the wrapper binds each argument to its slot.
+	if len(stmts) == 1 && stmts[0].Kind() == frontend.NodeReturnStatement && len(r.funcParamNodes(m)) == 0 {
 		retKids := r.prog.Children(stmts[0])
 		if len(retKids) != 1 {
 			return nil, &NotYetLowerable{Reason: "boxing an object method with a bare or multi-value return is a later slice"}
@@ -3790,14 +3844,22 @@ func (r *Renderer) boxMethodClosure(m frontend.Node) (ast.Expr, error) {
 		return &ast.CallExpr{Fun: sel("value", "NewFunc"), Args: []ast.Expr{thunk}}, nil
 	}
 
-	// A multi-statement body lowers to a typed Go func literal the same way an arrow's
-	// block body does, then boxFuncToDynamic wraps it in the value.NewFunc closure the
-	// object protocol calls, boxing the result and (a caller guarantees no parameters
-	// here) taking no arguments. The receiver scope is already cleared above, so a
-	// stray this inside the body would have handed back before this point.
+	// Every other body lowers to a typed Go func literal the same way an arrow's block
+	// body does, then boxFuncToDynamic wraps it in the value.NewFunc closure the object
+	// protocol calls: the wrapper reads each argument off the boxed list, coerces it into
+	// the parameter's static type, calls the func, and boxes the result back. The
+	// receiver scope is already cleared above, so a stray this inside the body would have
+	// handed back before this point.
 	sig, ok := r.prog.SignatureAt(m)
 	if !ok {
 		return nil, &NotYetLowerable{Reason: "boxing an object method with no call signature is a later slice"}
+	}
+	// The wrapper built below is this method's only call site, so it can reconstruct a
+	// default the parameter's static slot has no undefined to test for. Marking the
+	// method before its fields are built is what lets closureParamFields spell the plain
+	// field rather than hand back, and the wrapper reads the same default nodes back.
+	if r.wrapperFillableDefaults(sig, r.funcParamNodes(m)) {
+		r.boxWrapperDefaults[m] = true
 	}
 	fields, err := r.closureParamFields(m, sig, "method")
 	if err != nil {

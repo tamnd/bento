@@ -6,13 +6,6 @@ import (
 	"github.com/tamnd/bento/pkg/value"
 )
 
-type ObjConfigurableEnumerableValueWritable struct {
-	Value        float64 `json:"value"`
-	Writable     bool    `json:"writable"`
-	Enumerable   bool    `json:"enumerable"`
-	Configurable bool    `json:"configurable"`
-}
-
 func VerifyProperty(obj value.Value, name value.BStr, desc value.Value) bool {
 	d := obj.GetOwnPropertyDescriptor(value.StringValue(name))
 	if d.IsUndefined() {

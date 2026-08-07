@@ -160,6 +160,82 @@ func (re *RegExp) ReplaceAllFuncStr(s BStr, fn func(BStr) BStr) BStr {
 	return re.ReplaceFuncStr(s, fn)
 }
 
+// ReplaceCallStr runs String.prototype.replace with a replacer function called through
+// the value model, the form a dynamic receiver takes: `s.replace(re, (m, p1) => ...)`
+// where neither the string nor the function has a static type. It differs from
+// ReplaceFuncStr only in what the replacer is handed. ReplaceFuncStr serves the lowered
+// path, where the callback's declared signature is one BStr parameter, so it passes the
+// matched text alone; here the callback is a boxed value with no declared arity, so it
+// gets the whole argument list the specification defines: the matched text, then one
+// argument per capture group (undefined for a group that did not participate), then the
+// match's code-unit offset, then the subject.
+//
+// The match walk is the one ReplaceFuncStr makes. A non-global regexp replaces the
+// first match and leaves lastIndex alone; a global one resets lastIndex, replaces every
+// match, and advances one code unit past an empty match so the walk terminates.
+func (re *RegExp) ReplaceCallStr(s BStr, fn Value) BStr {
+	str := re2Subject(s)
+	if !re.global {
+		ns := re.searchText(str)
+		loc := ns.subjectIndices(re.re.FindStringSubmatchIndex(ns.text))
+		if loc == nil || (re.sticky && loc[0] != 0) {
+			return s
+		}
+		var b strings.Builder
+		b.WriteString(str[:loc[0]])
+		b.WriteString(re2Subject(ToString(fn.Call(replacerArgs(str, s, loc)...))))
+		b.WriteString(str[loc[1]:])
+		return re2Whole(b.String())
+	}
+	re.lastIndex = 0
+	var b strings.Builder
+	last := 0
+	for {
+		m, ok := re.match(s)
+		if !ok {
+			break
+		}
+		b.WriteString(str[last:m[0]])
+		b.WriteString(re2Subject(ToString(fn.Call(replacerArgs(str, s, m)...))))
+		last = m[1]
+		if m[0] == m[1] {
+			re.lastIndex++
+		}
+	}
+	b.WriteString(str[last:])
+	return re2Whole(b.String())
+}
+
+// ReplaceAllCallStr runs String.prototype.replaceAll with a replacer function called
+// through the value model, requiring a global regexp and throwing the same TypeError
+// ReplaceAllStr does without one.
+func (re *RegExp) ReplaceAllCallStr(s BStr, fn Value) BStr {
+	if !re.global {
+		Throw(NewTypeError(FromGoString("replaceAll must be called with a global RegExp")))
+	}
+	return re.ReplaceCallStr(s, fn)
+}
+
+// replacerArgs builds the argument list a replacer function receives for one match: the
+// matched text, one argument per capture group, the offset of the match, and the whole
+// subject. m holds byte index pairs in subject coordinates, the shape match returns, so
+// the texts read straight off str and the offset maps back to a code-unit index the way
+// every other position the regexp path reports does. A group with a -1 pair did not
+// participate in the match and is passed as undefined, which is what the specification
+// says and what a template's $n expands to nothing for.
+func replacerArgs(str string, s BStr, m []int) []Value {
+	args := make([]Value, 0, len(m)/2+2)
+	args = append(args, StringValue(re2Text(str, m[0], m[1])))
+	for i := 2; i+1 < len(m); i += 2 {
+		if m[i] < 0 {
+			args = append(args, Undefined)
+			continue
+		}
+		args = append(args, StringValue(re2Text(str, m[i], m[i+1])))
+	}
+	return append(args, Number(float64(re2Unit(str, m[0]))), StringValue(s))
+}
+
 // SplitStr runs String.prototype.split with a regexp separator (22 §22.2.7.11). It
 // walks the subject, matching the separator anchored at each position the way the
 // specification's sticky splitter clone does, cutting the text between matches into
