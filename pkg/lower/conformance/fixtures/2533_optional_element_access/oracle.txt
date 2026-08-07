@@ -1,0 +1,22 @@
+== stdout:
+b
+undefined
+2
+undefined
+h
+undefined
+7
+z
+undefined
+5 undefined
+5
+1
+undefined
+undefined
+undefined
+evals 0
+1
+evals 1
+
+== exit:
+0

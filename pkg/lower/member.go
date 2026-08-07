@@ -116,12 +116,19 @@ func (r *Renderer) propertyAccess(n frontend.Node) (ast.Expr, error) {
 	// leaf bento does not name, recognized by its source text; when it is present
 	// the access short-circuits on a nullish receiver and routes to its own lowering.
 	if len(kids) == 3 && r.isQuestionDotToken(kids[1]) {
-		return r.optionalChainAccess(kids[0], kids[2])
+		return r.optionalChainAccess(n, kids[0], kids[2])
 	}
 	if len(kids) != 2 {
 		return nil, &NotYetLowerable{Reason: "property access did not expose an object and a property name"}
 	}
-	obj, nameNode := kids[0], kids[1]
+	return r.propertyRead(n, kids[0], kids[1])
+}
+
+// propertyRead lowers o.p with the receiver and the name node already in hand, which is
+// what lets the optional spelling reuse it: a?.b on a receiver the checker proved is
+// never nullish is the plain read, and it arrives here with the ?. token dropped rather
+// than with a second copy of the dispatch below.
+func (r *Renderer) propertyRead(n, obj, nameNode frontend.Node) (ast.Expr, error) {
 	prop := r.prog.Text(nameNode)
 	// A member of a sibling namespace import read as a value resolves to the Go name
 	// its export lowered to: m.inc passed as a callback reads the bare func value the
@@ -904,10 +911,80 @@ func (r *Renderer) isQuestionDotToken(n frontend.Node) bool {
 // The tractable slice is a receiver that is exactly T | undefined over a class or
 // object shape whose member is a plain, non-optional field. A member that is
 // itself optional (which would double-wrap under OptMap), a getter or method, an
-// optional call a?.(), an optional element read a?.[i], and a receiver outside the
-// class or object shapes all hand back to their own later slices.
-func (r *Renderer) optionalChainAccess(recvNode, nameNode frontend.Node) (ast.Expr, error) {
-	prop := r.prog.Text(nameNode)
+// optional call a?.(), and a receiver outside the class or object shapes all hand
+// back to their own later slices.
+func (r *Renderer) optionalChainAccess(n, recvNode, nameNode frontend.Node) (ast.Expr, error) {
+	if expr, ok, err := r.settledChainLink(n, recvNode); ok || err != nil {
+		return expr, err
+	}
+	if r.chainReceiverNeverNullish(recvNode) {
+		return r.propertyRead(n, recvNode, nameNode)
+	}
+	return r.optionalChainProp(recvNode, r.prog.Text(nameNode))
+}
+
+// settledChainLink lowers an optional link whose receiver the checker narrowed all the
+// way to null or undefined, which makes the short circuit certain: the result is
+// undefined and the key is never evaluated. The receiver still is, since it can carry
+// an effect, so the fold is value.MissingProperty over it, the same one a provably
+// absent dotted member takes. It reports ok=false for every other receiver, including a
+// box, whose nullish question is a run-time one.
+//
+// The answer is a box, so it lands only where a box fits. The checker types such a read
+// undefined rather than any, and isBoxedChain reads this same question back so the read
+// is treated as a box by whatever consumes it; without that the console coercion would
+// look at the checker's `undefined` and find no shape to stringify.
+func (r *Renderer) settledChainLink(n, recvNode frontend.Node) (ast.Expr, bool, error) {
+	if !r.chainReceiverSettledNullish(recvNode) {
+		return nil, false, nil
+	}
+	rt := r.prog.TypeAt(n)
+	if rt.Flags != 0 && !r.isDynamicType(rt) && rt.Flags&^(frontend.TypeNull|frontend.TypeUndefined) != 0 {
+		return nil, false, r.notLowerable(n, "an optional chain on a provably nullish receiver in a static slot is a later slice")
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, false, err
+	}
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "MissingProperty"), Args: []ast.Expr{recv}}, true, nil
+}
+
+// chainReceiverSettledNullish reports whether the checker narrowed an optional link's
+// receiver to nothing but null and undefined, so the link always short-circuits. A box
+// is excluded because its kind is a run-time fact whatever the checker says.
+func (r *Renderer) chainReceiverSettledNullish(recvNode frontend.Node) bool {
+	if r.isBoxedChain(recvNode) {
+		return false
+	}
+	t := r.prog.TypeAt(recvNode)
+	return t.Flags != 0 && t.Flags&^(frontend.TypeNull|frontend.TypeUndefined) == 0
+}
+
+// chainReceiverNeverNullish reports whether the checker proved an optional link's
+// receiver is never null or undefined, which makes the ?. a no-op: there is nothing to
+// short-circuit on, so the link is the plain read with the token dropped.
+//
+// This is the everyday shape of a narrowed binding. `const b: Box | undefined = { v: 1 }`
+// is typed Box at every read of it, and so is a `let` after an assignment the flow
+// analysis followed, so a chain written against the declared type meets a receiver the
+// checker has already settled. A box is excluded for the same reason as above, and so
+// are any and unknown, which say nothing either way.
+func (r *Renderer) chainReceiverNeverNullish(recvNode frontend.Node) bool {
+	if r.isBoxedChain(recvNode) {
+		return false
+	}
+	const unsettled = frontend.TypeNull | frontend.TypeUndefined | frontend.TypeUnion |
+		frontend.TypeAny | frontend.TypeUnknown
+	t := r.prog.TypeAt(recvNode)
+	return t.Flags != 0 && t.Flags&unsettled == 0
+}
+
+// optionalChainProp is optionalChainAccess with the member name already resolved,
+// which is what lets the bracket spelling share it. a?.["k"] with a constant string
+// key reads the same member a?.k does, and the two forms differ only in where the name
+// comes from: the identifier's own text in one, the folded key in the other.
+func (r *Renderer) optionalChainProp(recvNode frontend.Node, prop string) (ast.Expr, error) {
 	// A boxed receiver answers the link at run time. The box already carries null and
 	// undefined among its kinds, so the short circuit is a nullish test on it and the
 	// read is the same dynamic Get every other member read off a box takes. This routes
@@ -1003,6 +1080,222 @@ func (r *Renderer) optionalMember(inner frontend.Type, prop string) (string, fro
 		}
 	}
 	return "", frontend.Type{}, false, nil
+}
+
+// optionalElementRead lowers one link of an optional chain spelled with brackets,
+// a?.[i]. It is the same short circuit the dotted a?.b takes and differs only in where
+// the key comes from: an expression evaluated at run time rather than a name written in
+// the source. The whole chain is nullish-poisoned, so when the receiver is null or
+// undefined the result is undefined and the index is never evaluated, which is why the
+// index is lowered inside the helper call or inside the mapping function rather than
+// beside the receiver.
+//
+// A receiver the checker already settled answers first, at nullish or at present, since
+// neither leaves a question for run time. Otherwise a boxed receiver dispatches through
+// the helpers below, which is what the everyday case is: a regexp exec answers a box, so
+// re.exec(s)?.[1] reads the capture off it. A constant string key is the bracket
+// spelling of the dotted read and takes the same path a?.k takes. An annotated
+// T | undefined over an array, a string, or a tuple maps its element read under
+// value.OptMap, the way the dotted link maps a field read.
+//
+// What hands back is an optional over a receiver with no index read of its own, a typed
+// array and a Map among them, a rest or optional tuple position, and a statically typed
+// index that is neither a number nor a string nor a symbol.
+func (r *Renderer) optionalElementRead(n, recvNode, idxNode frontend.Node) (ast.Expr, error) {
+	if expr, ok, err := r.settledChainLink(n, recvNode); ok || err != nil {
+		return expr, err
+	}
+	if r.chainReceiverNeverNullish(recvNode) {
+		return r.elementRead(n, recvNode, idxNode)
+	}
+	// A boxed receiver dispatches at run time, which is the everyday case: a regexp exec
+	// answers a box, so re.exec(s)?.[1] reads the capture off it. It routes before the
+	// constant-key fold below because the checker still types the receiver by its shape
+	// while the lowerer holds a value.Value, and the Opt path would map over something
+	// that is not an Opt, which is Go that does not compile rather than a hand-back.
+	if r.isBoxedChain(recvNode) || r.isDynamicType(r.prog.TypeAt(recvNode)) {
+		return r.optionalBoxedElementRead(recvNode, idxNode)
+	}
+	// o?.["k"] with a compile-time-constant string key reads the member "k", so it takes
+	// the dotted link's own path and gets the field selector under OptMap that a?.k gets.
+	// Only a pure key folds, an identifier or a string literal, so an impure one such as
+	// o?.[(n++, "a")] keeps its effect and takes the run-time path below.
+	if key, ok := r.pureConstStringKey(idxNode); ok {
+		return r.optionalChainProp(recvNode, key)
+	}
+	inner, ok := r.optionalInner(r.prog.UnionMembers(r.prog.TypeAt(recvNode)))
+	if !ok {
+		return nil, r.notLowerable(recvNode, "optional element access ?.[i] on a receiver that is not a T | undefined optional is a later slice")
+	}
+	read, retType, err := r.optionalIndexRead(inner, idxNode)
+	if err != nil {
+		return nil, err
+	}
+	if read == nil {
+		return nil, r.notLowerable(recvNode, "optional element access ?.[i] on an optional of a receiver with no index read of its own is a later slice")
+	}
+	recvExpr, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	paramType, err := r.typeExpr(inner)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	// value.OptMap(recv, func(v A) B { return v.At(i) }): the mapping function runs only
+	// when the receiver is present, so the index expression inside it is evaluated only
+	// then too, which is the short circuit the chain promises.
+	mapFn := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("v")}, Type: paramType}}},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: retType}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{read(ident("v"))}}}},
+	}
+	return &ast.CallExpr{Fun: sel("value", "OptMap"), Args: []ast.Expr{recvExpr, mapFn}}, nil
+}
+
+// optionalIndexRead resolves the index read an optional's inner type performs and
+// answers it as a function of the unwrapped receiver, which is the shape the mapping
+// function under OptMap needs: the read is built against the parameter name rather than
+// against a lowered receiver expression, since the receiver at that point is the Opt.
+//
+// Three inner types read here. A string indexes through CharAt and answers a
+// one-code-unit string. An array indexes through At and answers its element. A tuple
+// selects the field its literal index names, the same E<i> the plain tuple read
+// selects. It answers a nil read for anything else, which is what makes the caller hand
+// back rather than emit a call the Go type does not carry: a typed array and a Map are
+// each indexable in their own way and each is its own later slice.
+func (r *Renderer) optionalIndexRead(inner frontend.Type, idxNode frontend.Node) (func(ast.Expr) ast.Expr, ast.Expr, error) {
+	if elems, isTuple := r.prog.TupleElements(inner); isTuple {
+		idx, ok := r.tupleLiteralIndex(idxNode, len(elems))
+		if !ok || elems[idx].Rest || elems[idx].Optional {
+			return nil, nil, nil
+		}
+		retType, err := r.typeExpr(elems[idx].Type)
+		if err != nil {
+			return nil, nil, err
+		}
+		field := "E" + itoa(idx)
+		return func(v ast.Expr) ast.Expr { return &ast.SelectorExpr{X: v, Sel: ident(field)} }, retType, nil
+	}
+	if !r.isNumber(idxNode) {
+		return nil, nil, nil
+	}
+	idx, err := r.lowerExpr(idxNode)
+	if err != nil {
+		return nil, nil, err
+	}
+	indexed := func(method string) func(ast.Expr) ast.Expr {
+		return func(v ast.Expr) ast.Expr {
+			return &ast.CallExpr{Fun: &ast.SelectorExpr{X: v, Sel: ident(method)}, Args: []ast.Expr{idx}}
+		}
+	}
+	if inner.Flags&frontend.TypeString != 0 {
+		return indexed("CharAt"), sel("value", "BStr"), nil
+	}
+	if inner.Flags&frontend.TypeObject == 0 {
+		return nil, nil, nil
+	}
+	elem, ok := r.prog.ElementType(inner)
+	if !ok {
+		return nil, nil, nil
+	}
+	retType, err := r.typeExpr(elem)
+	if err != nil {
+		return nil, nil, err
+	}
+	return indexed("At"), retType, nil
+}
+
+// optionalBoxedElementRead lowers a?.[i] where the receiver is a box, which is the
+// shape the everyday optional bracket read has: a regexp exec, a JSON parse, and a walk
+// off an any all answer one. The receiver carries its own kind, so the read indexes an
+// array, a string, or an object property by the same rule a plain a[i] on a box does,
+// and each helper below asks the nullish question first so the index is never read off
+// a missing receiver.
+//
+// The index is dispatched on its static type the way dynamicElementRead dispatches it,
+// so a number reads through GetIndex, a string through Get, and a symbol or another box
+// through GetElem. A statically typed index that is none of those, a bigint or a
+// boolean, is its own later slice.
+//
+// Where the index goes is the whole subtlety. JavaScript does not evaluate the index of
+// a short-circuited link at all, so `gone?.[next()]` leaves next uncalled, and a Go call
+// evaluates its arguments before it runs. An index with no observable effect, a literal
+// or a plain name, can go in as an argument to the helper because evaluating it is not
+// something a program can tell happened. Every other index goes inside a function
+// literal that runs only past the nullish test, which costs a few lines of generated Go
+// at a site that would otherwise call what it must not call.
+func (r *Renderer) optionalBoxedElementRead(recvNode, idxNode frontend.Node) (ast.Expr, error) {
+	method := ""
+	switch {
+	case r.isNumber(idxNode):
+		method = "GetIndex"
+	case r.isString(idxNode):
+		method = "Get"
+	case r.isDynamic(idxNode), r.isSymbol(idxNode):
+		method = "GetElem"
+	default:
+		return nil, r.notLowerable(idxNode, "an optional element access with a non-number, non-string index is a later slice")
+	}
+	recv, err := r.lowerExpr(recvNode)
+	if err != nil {
+		return nil, err
+	}
+	idx, err := r.lowerExpr(idxNode)
+	if err != nil {
+		return nil, err
+	}
+	r.requireImport(valuePkg)
+	if effectFreeIndex(idxNode) {
+		helper := map[string]string{"GetIndex": "OptionalIndex", "Get": "OptionalMember", "GetElem": "OptionalElem"}[method]
+		return &ast.CallExpr{Fun: sel("value", helper), Args: []ast.Expr{recv, idx}}, nil
+	}
+	// func(v value.Value) value.Value {
+	//   if v.IsNullish() { return value.Undefined }
+	//   return v.GetIndex(<index>)
+	// }(<receiver>)
+	//
+	// The receiver is the argument, so it is evaluated once and before the test, the way
+	// the source reads it. The index is in the body, so it is evaluated only after the
+	// test passes, which is the short circuit.
+	body := &ast.BlockStmt{List: []ast.Stmt{
+		&ast.IfStmt{
+			Cond: &ast.CallExpr{Fun: &ast.SelectorExpr{X: ident("v"), Sel: ident("IsNullish")}},
+			Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{sel("value", "Undefined")}}}},
+		},
+		&ast.ReturnStmt{Results: []ast.Expr{
+			&ast.CallExpr{Fun: &ast.SelectorExpr{X: ident("v"), Sel: ident(method)}, Args: []ast.Expr{idx}},
+		}},
+	}}
+	return &ast.CallExpr{
+		Fun: &ast.FuncLit{
+			Type: &ast.FuncType{
+				Params:  &ast.FieldList{List: []*ast.Field{{Names: []*ast.Ident{ident("v")}, Type: sel("value", "Value")}}},
+				Results: &ast.FieldList{List: []*ast.Field{{Type: sel("value", "Value")}}},
+			},
+			Body: body,
+		},
+		Args: []ast.Expr{recv},
+	}, nil
+}
+
+// effectFreeIndex reports whether evaluating an index expression is something a program
+// can tell happened. Only a literal and a plain name qualify, which is what the
+// everyday optional read is written with. A property access is deliberately excluded
+// even though it looks harmless: reading a property can run a getter, and running a
+// getter a short circuit should have skipped is exactly the wrong this guards.
+func effectFreeIndex(n frontend.Node) bool {
+	switch n.Kind() {
+	case frontend.NodeIdentifier, frontend.NodeThisKeyword,
+		frontend.NodeNumericLiteral, frontend.NodeStringLiteral, frontend.NodeBigIntLiteral,
+		frontend.NodeNoSubstitutionTemplateLiteral,
+		frontend.NodeTrueKeyword, frontend.NodeFalseKeyword, frontend.NodeNullKeyword:
+		return true
+	}
+	return false
 }
 
 // mathConstant maps a Math namespace property name to the value-package constant
@@ -1253,7 +1546,12 @@ func (r *Renderer) isBoxedChain(n frontend.Node) bool {
 			// it string | undefined, and the ?.length after it dispatches rather than
 			// mapping an Opt that is not there.
 			if recv, ok := r.optionalLinkReceiver(n); ok {
-				return r.isBoxedChain(recv)
+				// A link whose receiver the checker settled at null or undefined folds to
+				// value.MissingProperty, which is also a box. Reading that here is what lets
+				// the console coercion see a box: the checker types such a read undefined,
+				// and without this the coercion would look for a shape to stringify and find
+				// none.
+				return r.isBoxedChain(recv) || r.chainReceiverSettledNullish(recv)
 			}
 			if n.Kind() != frontend.NodeCallExpression && r.prog.TypeAt(n).Flags&unboxes != 0 {
 				return false
@@ -1300,12 +1598,13 @@ func (r *Renderer) isConsoleMethodCall(n frontend.Node) bool {
 	return len(recv) > 0 && r.isGlobalRef(recv[0], "console")
 }
 
-// optionalLinkReceiver reports whether n is one link of an optional property chain,
-// a?.b, and answers the receiver it reads off. The link is a property access carrying
-// the ?. token between its receiver and its name, which is the same shape lowerMember
-// dispatches optionalChainAccess on.
+// optionalLinkReceiver reports whether n is one link of an optional chain, a?.b or
+// a?.[i], and answers the receiver it reads off. The link is a property or element
+// access carrying the ?. token between its receiver and its key, which is the same
+// shape lowerMember dispatches optionalChainAccess and optionalElementRead on. The two
+// spellings answer the same way because they lower the same way: a box in, a box out.
 func (r *Renderer) optionalLinkReceiver(n frontend.Node) (frontend.Node, bool) {
-	if n.Kind() != frontend.NodePropertyAccessExpression {
+	if n.Kind() != frontend.NodePropertyAccessExpression && n.Kind() != frontend.NodeElementAccessExpression {
 		return nil, false
 	}
 	kids := r.prog.Children(n)
@@ -1571,10 +1870,24 @@ func (r *Renderer) dynamicWalkFits(n frontend.Node) bool {
 // access as.
 func (r *Renderer) elementAccess(n frontend.Node) (ast.Expr, error) {
 	kids := r.prog.Children(n)
-	if len(kids) != 2 {
-		return nil, &NotYetLowerable{Reason: "element access did not expose an object and an index"}
+	// An optional element access a?.[i] carries a ?. token between the receiver and the
+	// index, so the node exposes three children rather than two, the same way a?.b does
+	// for the dotted form. It routes to its own lowering, which short-circuits on a
+	// nullish receiver and never evaluates the index in that case.
+	if len(kids) == 3 && r.isQuestionDotToken(kids[1]) {
+		return r.optionalElementRead(n, kids[0], kids[2])
 	}
-	obj, idxNode := kids[0], kids[1]
+	if len(kids) != 2 {
+		return nil, r.notLowerable(n, "element access did not expose an object and an index")
+	}
+	return r.elementRead(n, kids[0], kids[1])
+}
+
+// elementRead lowers a[i] with the receiver and the index already in hand, which is what
+// lets the optional spelling reuse it: a?.[i] on a receiver the checker proved is never
+// nullish is the plain read, and it arrives here with the ?. token dropped rather than
+// with a second copy of the dispatch below.
+func (r *Renderer) elementRead(n, obj, idxNode frontend.Node) (ast.Expr, error) {
 	// arguments[i] reads the i-th argument the call supplied. The current body backs
 	// arguments with a value.Array[value.Value] store, so the read is the store's At,
 	// which bounds-checks and yields the boxed argument (undefined out of range, the

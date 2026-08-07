@@ -1,7 +1,6 @@
 package lower
 
 import (
-	"errors"
 	"strings"
 	"testing"
 )
@@ -46,16 +45,14 @@ func TestOptionalChainClassReceiver(t *testing.T) {
 	}
 }
 
-// TestOptionalChainElementHandsBack pins the boundary: an optional element read
-// a?.[i] is a different node shape than a property access and is not lowered by
-// this slice, so it hands back with a named reason.
-func TestOptionalChainElementHandsBack(t *testing.T) {
+// TestOptionalChainElement pins that the bracketed spelling reaches the same place the
+// dotted one does. It used to be the boundary of this slice and hand back, since a?.[i]
+// is a different node shape than a property access; it lowers now, and an optional
+// receiver still maps over its inner value rather than dispatching at run time.
+func TestOptionalChainElement(t *testing.T) {
 	const src = "export function first(a: number[] | undefined): number { return (a?.[0]) ?? 0; }\n"
-	prog := compile(t, src)
-	r := NewRenderer(prog)
-	_, err := r.RenderProgram(entryFile(t, prog))
-	var nyl *NotYetLowerable
-	if !errors.As(err, &nyl) {
-		t.Fatalf("RenderProgram err = %v, want a *NotYetLowerable", err)
+	source := renderProgram(t, src)
+	if !strings.Contains(source, "value.OptMap(a, func(v *value.Array[float64]) float64 {") {
+		t.Errorf("optional element read did not print the array map:\n%s", source)
 	}
 }
