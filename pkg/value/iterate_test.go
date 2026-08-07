@@ -60,6 +60,41 @@ func TestIterateWalksAnArrayLike(t *testing.T) {
 	}
 }
 
+// TestIterateThrowsForAnObjectWithNoLength pins the boundary the array-like walk draws.
+// An object carrying a length is the arguments-like shape a built-in hands back and it
+// walks; a plain object is not iterable and throws the way JavaScript does. Reading
+// length off it would answer undefined, which ToLength turns into 0, so without the
+// probe the walk would quietly yield nothing where the language raises a TypeError.
+func TestIterateThrowsForAnObjectWithNoLength(t *testing.T) {
+	o := NewObject()
+	o.Set(FromGoString("x"), Number(1))
+	defer func() {
+		rec := recover()
+		if rec == nil {
+			t.Fatalf("iterating a plain object did not throw")
+		}
+		e, ok := rec.(Thrown)
+		if !ok {
+			t.Fatalf("panicked with %T, want a thrown JavaScript value", rec)
+		}
+		if e.ErrorName() != "TypeError" || e.ErrorMessage() != "o is not iterable" {
+			t.Errorf("threw %s: %s, want TypeError: o is not iterable", e.ErrorName(), e.ErrorMessage())
+		}
+	}()
+	Iterate(o, "o")
+}
+
+// TestIterateWalksAnEmptyArrayLike pins that the probe asks whether length is there
+// rather than whether it is non-zero, so an array-like holding nothing still iterates
+// and answers no elements instead of throwing.
+func TestIterateWalksAnEmptyArrayLike(t *testing.T) {
+	o := NewObject()
+	o.Set(FromGoString("length"), Number(0))
+	if got := drainIter(Iterate(o, "o")); got != "" {
+		t.Errorf("walked %q, want no elements", got)
+	}
+}
+
 // TestIterateUsesAnOwnSymbolIterator pins the precedence the spec sets: Symbol.iterator
 // is looked up first and unconditionally, so a receiver that defines one overrides the
 // index walk it would otherwise take.
