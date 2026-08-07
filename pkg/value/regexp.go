@@ -1014,8 +1014,8 @@ func multilineAnchored(pattern string, fl regExpFlags) bool {
 func patternTellsTerminatorsApart(pattern string) bool {
 	rs := []rune(pattern)
 	for i := 0; i < len(rs); i++ {
-		switch c := rs[i]; {
-		case c == '\\':
+		switch c := rs[i]; c {
+		case '\\':
 			if i+1 >= len(rs) {
 				return true // a trailing backslash hands back on its own anyway
 			}
@@ -1028,7 +1028,7 @@ func patternTellsTerminatorsApart(pattern string) bool {
 				return true
 			}
 			i += consumed - 1
-		case c == '[':
+		case '[':
 			apart, consumed := classTellsTerminatorsApart(rs, i)
 			if apart {
 				return true
