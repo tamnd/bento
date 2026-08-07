@@ -1398,6 +1398,11 @@ func (r *Renderer) bridgeArg(lowered ast.Expr, node frontend.Node, pt frontend.T
 	} else if ok {
 		return opt, nil
 	}
+	if merged, ok, err := r.mergedArrayLiteralContextual(node, pt); err != nil {
+		return nil, err
+	} else if ok {
+		return merged, nil
+	}
 	if fn, ok, err := r.coerceFuncValue(lowered, node, pt); err != nil {
 		return nil, err
 	} else if ok {

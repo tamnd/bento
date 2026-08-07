@@ -54,6 +54,18 @@ func (r *Renderer) renderUnion(t frontend.Type) (ast.Expr, error) {
 		return index(sel("value", "Opt"), elem), nil
 	}
 
+	// A union of object shapes that all carry the same key set has nothing to
+	// discriminate on and nothing to gain from a tag: the checker already answers a
+	// read of any key with the union of what the members hold there, so one struct
+	// whose fields are those unions is exactly the type, not an approximation. It
+	// routes ahead of the tagged sum below, which would otherwise refuse for want of
+	// a discriminant. The motivating shape is the ternary that picks between two
+	// literals of the same keys, `typeof ms === "bigint" ? { two: 2n } : { two: 2 }`,
+	// which node's own test harness opens with.
+	if merged, ok, err := r.mergedObjectUnion(t, members); ok || err != nil {
+		return merged, err
+	}
+
 	values := make([]string, 0, len(members))
 	allStringLiterals := true
 	for _, m := range members {
@@ -89,6 +101,181 @@ func (r *Renderer) renderUnion(t frontend.Type) (ast.Expr, error) {
 	// missed the shape; returning the same BStr keeps the two paths in agreement.
 	r.requireImport(valuePkg)
 	return sel("value", "BStr"), nil
+}
+
+// mergedObjectUnion renders a union of like-keyed object shapes as the single struct
+// their merge describes, and reports false for a union that is not that shape so the
+// caller falls through to the tagged sum.
+//
+// The merge is sound because the key sets agree. TypeScript answers `u.k` on a union
+// with the union of each member's `k`, which is exactly the field the merged struct
+// carries, so a read is typed the same either way. The one thing the merge admits
+// that the union does not is a combination across members, a value whose `two` came
+// from one arm and whose `four` came from another, and nothing can build one: a
+// value only ever enters the slot as a whole member, so every field of it comes from
+// the same arm. Correlation is not lost either, because there was none to lose:
+// TypeScript narrows a union of objects only through a discriminant property, which
+// the caller has already looked for and not found.
+//
+// A differing key set is a different matter and stays with the tagged sum. Merging
+// `{a} | {a, b}` would grow a `b` field on a value that does not have one, and the
+// `in` operator, which is how the language tells those two apart, would then answer
+// for a key the shape carries but the value never set.
+//
+// Every member has to be a plain record, the same bar the nullable-object arm sets:
+// a class instance, an array, or a method bundle carries behavior a struct of data
+// fields would drop.
+func (r *Renderer) mergedObjectUnion(t frontend.Type, members []frontend.Type) (ast.Expr, bool, error) {
+	if !r.likeKeyedObjectUnion(members) {
+		return nil, false, nil
+	}
+	// The union's own properties are the merged fields, so the struct is interned from
+	// the union type itself rather than assembled member by member.
+	e, err := r.renderObject(t)
+	if err != nil {
+		return nil, false, err
+	}
+	return e, true, nil
+}
+
+// isMergedObjectUnion reports whether a type is a union that lowers to the merged
+// struct, so the paths that work on a fixed shape, a member read, a field write, a
+// struct literal, can treat it as the shape it lowers to. It answers only for a
+// union; a plain object type is already a shape and takes those paths on its own.
+func (r *Renderer) isMergedObjectUnion(t frontend.Type) bool {
+	if t.Flags&frontend.TypeUnion == 0 {
+		return false
+	}
+	return r.likeKeyedObjectUnion(r.prog.UnionMembers(t))
+}
+
+// mergedUnionSlot reports whether a name reads a slot whose declared type is a union
+// of like-keyed object shapes, whatever the checker has narrowed it to at this use.
+// The Go value in that slot is the merged struct for the whole of its life, since the
+// narrowing is a fact about the checker's view and not about the representation, so a
+// path that picks Go types from the narrowed type would pick a member struct the value
+// never had. It answers the question about the slot, not the expression, which is why
+// it asks the declared type rather than TypeAt.
+func (r *Renderer) mergedUnionSlot(n frontend.Node) bool {
+	_, ok := r.mergedUnionOf(n)
+	return ok
+}
+
+// mergedUnionOf returns the merged object union a name's slot holds, whether or not
+// the checker has narrowed the reference at this use, and reports false for anything
+// else. The declared type is asked first because it is the one that names the Go
+// struct; the narrowed type answers for an expression that is not a name and so has no
+// declaration to ask.
+func (r *Renderer) mergedUnionOf(n frontend.Node) (frontend.Type, bool) {
+	if declared, _, ok := r.prog.DeclaredTypeAt(n); ok && r.isMergedObjectUnion(declared) {
+		return declared, true
+	}
+	if t := r.prog.TypeAt(n); r.isMergedObjectUnion(t) {
+		return t, true
+	}
+	return frontend.Type{}, false
+}
+
+// likeKeyedObjectUnion is the merge's condition on its own, with no interning, so it
+// can be asked as a question.
+func (r *Renderer) likeKeyedObjectUnion(members []frontend.Type) bool {
+	if len(members) < 2 {
+		return false
+	}
+	for _, m := range members {
+		if m.Flags&frontend.TypeObject == 0 || m.Flags&frontend.TypeUnion != 0 {
+			return false
+		}
+		if !r.isPlainRecordType(m) {
+			return false
+		}
+	}
+	// A discriminated union keeps its tag: narrowing on the discriminant is real
+	// information the merge would throw away.
+	if _, _, ok := r.discriminant(members); ok {
+		return false
+	}
+	return sameKeySet(r, members)
+}
+
+// conditionalMergedObject lowers a ternary whose whole-expression type is a union of
+// like-keyed object shapes. There is nothing to tag, so the IIFE returns the merged
+// struct pointer and each branch builds at the merged shape rather than at its own
+// member type, which is what keeps the two returns the same Go type. Building at the
+// merged shape is also what preserves identity: the object is created once, as the
+// thing the slot holds, rather than created at a member shape and copied into
+// another.
+//
+// A branch that is not an object literal has nothing to rebuild. Converting an
+// existing value from a member shape to the merged one would have to copy it field
+// by field, and a copy is a different object from the one the source named, so that
+// branch hands back instead.
+func (r *Renderer) conditionalMergedObject(cond ast.Expr, trueNode, falseNode frontend.Node, target frontend.Type) (ast.Expr, bool, error) {
+	if !r.isMergedObjectUnion(target) {
+		return nil, false, nil
+	}
+	gt, err := r.typeExpr(target)
+	if err != nil {
+		return nil, false, err
+	}
+	branch := func(n frontend.Node) (ast.Expr, error) {
+		lit := r.unwrapParens(n)
+		if lit.Kind() != frontend.NodeObjectLiteralExpression {
+			return nil, &NotYetLowerable{Reason: "a branch of a like-keyed object union that is not an object literal is a later slice"}
+		}
+		return r.objectLiteralContextual(lit, target)
+	}
+	whenTrue, err := branch(trueNode)
+	if err != nil {
+		return nil, false, err
+	}
+	whenFalse, err := branch(falseNode)
+	if err != nil {
+		return nil, false, err
+	}
+	lit := &ast.FuncLit{
+		Type: &ast.FuncType{
+			Params:  &ast.FieldList{},
+			Results: &ast.FieldList{List: []*ast.Field{{Type: gt}}},
+		},
+		Body: &ast.BlockStmt{List: []ast.Stmt{
+			&ast.IfStmt{
+				Cond: cond,
+				Body: &ast.BlockStmt{List: []ast.Stmt{&ast.ReturnStmt{Results: []ast.Expr{whenTrue}}}},
+			},
+			&ast.ReturnStmt{Results: []ast.Expr{whenFalse}},
+		}},
+	}
+	return &ast.CallExpr{Fun: lit}, true, nil
+}
+
+// sameKeySet reports whether every member of an object union declares the same
+// property names, the condition the merged struct rests on. Order is not part of it,
+// since the checker lists properties in declaration order and two members of a union
+// need not have been written the same way.
+func sameKeySet(r *Renderer, members []frontend.Type) bool {
+	first := keySet(r, members[0])
+	for _, m := range members[1:] {
+		ks := keySet(r, m)
+		if len(ks) != len(first) {
+			return false
+		}
+		for k := range ks {
+			if !first[k] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// keySet collects a type's declared property names.
+func keySet(r *Renderer, t frontend.Type) map[string]bool {
+	out := map[string]bool{}
+	for _, p := range r.prog.Properties(t) {
+		out[p.Name] = true
+	}
+	return out
 }
 
 // optionalInner reports whether members are the optional shape T | undefined and

@@ -1,0 +1,36 @@
+== stdout:
+tern-two => "number"
+tern-four => "number"
+tern-seven => "number"
+tern-json => "{\"two\":2,\"four\":4,\"seven\":7}"
+bind-a => 1
+bind-b => "y"
+bind-typeof-a => "number"
+bind-json => "{\"a\":1,\"b\":\"y\"}"
+bind-keys => "a,b"
+bind-in => true
+bind-missing-in => false
+ret-if-true => "number"
+ret-if-false => "string"
+ret-tern-true => "number"
+ret-tern-false => "string"
+arg-literal => "number"
+arg-literal-other => "string"
+pass-a => "string"
+slot-before => "number"
+slot-after => "string"
+slot-json => "{\"a\":\"z\",\"b\":2}"
+arr-len => 2
+arr-0 => "number"
+arr-1 => "string"
+arr-json => "[{\"a\":1,\"b\":\"y\"},{\"a\":\"z\",\"b\":2}]"
+nested-a => "number"
+nested-n => 3
+nested-json => "{\"u\":{\"a\":1,\"b\":\"y\"},\"n\":3}"
+narrow-num => "num:2"
+narrow-str => "str:1"
+same-a => 1
+same-typeof-b => "string"
+
+== exit:
+0

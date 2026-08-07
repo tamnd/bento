@@ -768,6 +768,17 @@ func (r *Renderer) conditionalUnion(n frontend.Node, cond, whenTrue ast.Expr, tr
 	// whose null branch is nil (nullableref.go). So the IIFE returns that pointer and
 	// each branch passes through wrapToUnion, which turns a null literal into nil and
 	// leaves a real reference untouched.
+	// A ternary whose whole-expression type is a union of like-keyed object shapes
+	// needs no tag either: both branches build the one struct the merge describes
+	// (mergedObjectUnion), so the IIFE returns that struct pointer and each branch is
+	// rebuilt at it rather than at its own member type. It routes ahead of the
+	// reference path below, which would take the merged struct for a pointer both
+	// branches already hold and return each branch's own member struct into it. This
+	// is the shape node's test harness opens with, `typeof ms === "bigint" ? { two:
+	// 2n } : { two: 2 }`.
+	if expr, ok, err := r.conditionalMergedObject(cond, trueNode, falseNode, target); ok || err != nil {
+		return expr, err
+	}
 	if expr, ok, err := r.conditionalRef(cond, whenTrue, trueNode, whenFalse, falseNode, target); err != nil || ok {
 		return expr, err
 	}
