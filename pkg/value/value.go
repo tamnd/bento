@@ -473,6 +473,30 @@ func OptionalMember(v Value, key BStr) Value {
 	return v.Get(key)
 }
 
+// OptionalIndex is a?.[i] on a boxed receiver with a number index: undefined when the
+// receiver is null or undefined, and the ordinary indexed read otherwise. It is the
+// numeric spelling of OptionalMember, and it exists rather than the caller boxing the
+// index and going through OptionalElem so a number index costs the same here as it does
+// on the plain a[i] read.
+func OptionalIndex(v Value, i float64) Value {
+	if v.IsNullish() {
+		return Undefined
+	}
+	return v.GetIndex(i)
+}
+
+// OptionalElem is a?.[k] on a boxed receiver whose key is itself a box or a symbol:
+// undefined when the receiver is null or undefined, and the ordinary computed read
+// otherwise. The key is coerced the way GetElem coerces it, a symbol looked up by
+// identity and anything else taken through ToString, so an optional read resolves the
+// same key its non-optional spelling would.
+func OptionalElem(v Value, key Value) Value {
+	if v.IsNullish() {
+		return Undefined
+	}
+	return v.GetElem(key)
+}
+
 // MissingProperty is the value of a property read whose receiver's fixed shape
 // does not declare the property. A shape interns to a Go struct that carries
 // exactly its declared fields, so such a read is a provable miss and the language

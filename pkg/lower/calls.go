@@ -27,6 +27,13 @@ func (r *Renderer) callExpr(n frontend.Node) (ast.Expr, error) {
 	if len(kids) == 0 {
 		return nil, &NotYetLowerable{Reason: "call expression exposed no callee"}
 	}
+	// An optional call f?.(x) carries a ?. token between the callee and the arguments,
+	// the same way a?.b and a?.[i] do. Nothing below reads it, so the token would lower
+	// as if it were an argument and the reader would be told an expression kind is a
+	// later slice, naming a token rather than the form. Say the form.
+	if len(kids) > 1 && r.isQuestionDotToken(kids[1]) {
+		return nil, r.notLowerable(n, "an optional call f?.() is a later slice")
+	}
 	// A dynamic import() is a call whose callee is the import keyword, not a value.
 	// It routes to the dynamic-import classifier before the callee paths below,
 	// which would otherwise treat the keyword as a function value and hand back
