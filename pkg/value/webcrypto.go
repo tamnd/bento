@@ -148,7 +148,7 @@ func fillRandom(b []byte) {
 // answer "function" the way it does in Node instead of "undefined".
 var subtleCryptoNames = []string{
 	"encrypt", "decrypt", "sign", "verify", "digest",
-			"generateKey", "deriveKey", "deriveBits",
+	"generateKey", "deriveKey", "deriveBits",
 	"importKey", "exportKey", "wrapKey", "unwrapKey",
 	"getPublicKey", "encapsulateBits", "encapsulateKey",
 	"decapsulateBits", "decapsulateKey",
