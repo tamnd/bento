@@ -139,3 +139,80 @@ func TestAStaticMemberOnAHostedGlobalStillLowersThroughRenderFunc(t *testing.T) 
 		t.Fatalf("want the static member:\n%s", got)
 	}
 }
+
+// The Node classes bento's runtime builds are hosted the same way the codec and
+// scheduling globals are, which is what lets test/common/index.js:272 lower. That
+// line names twelve globals in one Set literal, and AbortController was the first of
+// them with no value form, so it was the first refusal for 1004 of the suite's 3822
+// tests.
+
+// TestAClassGlobalReadsAsItsValue pins the name at the head of that list. Every
+// other entry already had a value form, so this one line is what the whole family
+// turned on.
+func TestAClassGlobalReadsAsItsValue(t *testing.T) {
+	src := "const f = (x: any) => { console.log(typeof x); };\n" +
+		"f(AbortController);\n"
+	got := renderProgram(t, src)
+	if !strings.Contains(got, `value.GlobalValue("AbortController")`) {
+		t.Fatalf("want AbortController read as its runtime value:\n%s", got)
+	}
+}
+
+// TestTheKnownGlobalsSetLowers is the gate itself, the twelve names test/common
+// collects to tell its own leaks from the host's. It is pinned whole rather than one
+// name at a time because what mattered was that every entry answered, not that any
+// particular one did.
+func TestTheKnownGlobalsSetLowers(t *testing.T) {
+	src := `const knownGlobals = new Set([
+  AbortController,
+  atob,
+  btoa,
+  clearImmediate,
+  clearInterval,
+  clearTimeout,
+  global,
+  setImmediate,
+  setInterval,
+  setTimeout,
+  queueMicrotask,
+  structuredClone,
+]);
+console.log(String(knownGlobals.size));
+`
+	got := renderUncheckedJS(t, src)
+	for _, want := range []string{
+		`value.GlobalValue("AbortController")`,
+		`value.GlobalValue("atob")`,
+		`value.GlobalValue("structuredClone")`,
+		bentoGlobalThisName,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("the known-globals set is missing %s:\n%s", want, got)
+		}
+	}
+}
+
+// TestConstructingAHostedClassGlobalStaysDirect pins that hosting the value form did
+// not take the construction away from the static path. new AbortController() still
+// lowers to the runtime constructor, which is the shape a program actually writes;
+// the value form is only what naming it hands over.
+func TestConstructingAHostedClassGlobalStaysDirect(t *testing.T) {
+	got := renderProgram(t, "const c = new AbortController();\nc.abort();\nconsole.log(typeof c);\n")
+	if !strings.Contains(got, "value.NewAbortController()") {
+		t.Fatalf("want the direct constructor:\n%s", got)
+	}
+	if strings.Contains(got, `value.GlobalValue("AbortController")`) {
+		t.Fatalf("the construction went through the value form:\n%s", got)
+	}
+}
+
+// TestAStaticOnAClassGlobalStaysRefused pins the ceiling the value form is under. A
+// hosted global carries its name and its call and nothing else, so a member read off
+// one is a read of a value that has no members, and it keeps refusing at compile time
+// naming the global rather than answering the undefined the value holds.
+func TestAStaticOnAClassGlobalStaysRefused(t *testing.T) {
+	reason := renderProgramHandBack(t, "console.log(AbortController.name);\n")
+	if !strings.Contains(reason, "the ambient global AbortController read as a value") {
+		t.Fatalf("reason = %q, want the AbortController refusal", reason)
+	}
+}

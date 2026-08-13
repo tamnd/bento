@@ -107,3 +107,54 @@ for (const key in globalThis) { console.log("own", key); }
 		t.Errorf("global scope behaviour: got %q, want %q", got, want)
 	}
 }
+
+// global is Node's own second name for the same object, and test/common uses both
+// within twenty lines. These pin that the two spellings are one object here too, and
+// that a program's own binding of the name is still its own.
+
+// TestGlobalReadsTheSameObjectGlobalThisDoes pins the emit: the alias resolves to the
+// one package-level object rather than to a second one or to an undeclared Go symbol.
+func TestGlobalReadsTheSameObjectGlobalThisDoes(t *testing.T) {
+	out := renderUncheckedJS(t, "global.n = 1; console.log(globalThis.n);\n")
+	if !strings.Contains(out, "var "+bentoGlobalThisName+" = value.GlobalThisValue()") {
+		t.Errorf("the global object was not emitted once at package level:\n%s", out)
+	}
+	if strings.Count(out, "value.GlobalThisValue()") != 1 {
+		t.Errorf("the two names built two objects:\n%s", out)
+	}
+}
+
+// TestGlobalMemberOfAnUnmodelledGlobalHandsBack pins that the honest refusal reaches
+// through the alias too. global.crypto is a real object in Node and bento has not
+// built one, so reading the undefined the global object holds for it would be a wrong
+// answer under either spelling.
+func TestGlobalMemberOfAnUnmodelledGlobalHandsBack(t *testing.T) {
+	handsBackJS(t, "console.log(typeof global.crypto);\n")
+}
+
+// TestALocalBindingNamedGlobalIsItsOwn pins the shadow rule. A binding a function
+// declares is not the ambient global however it is spelled, so the name reads the
+// slot the program wrote rather than the global object.
+func TestALocalBindingNamedGlobalIsItsOwn(t *testing.T) {
+	out := renderUncheckedJS(t, "function f() { const global = 3; return global; }\nconsole.log(f());\n")
+	if strings.Contains(out, bentoGlobalThisName) {
+		t.Errorf("a local binding named global read the global object:\n%s", out)
+	}
+}
+
+// TestGlobalRunsAsTheGlobalScope is the behaviour end to end: the two names are the
+// same object, a property written through one is read through the other, and the
+// identity comparison test/common's known-globals set rests on holds.
+func TestGlobalRunsAsTheGlobalScope(t *testing.T) {
+	skipIfShort(t)
+	src := `global.marker = 7;
+console.log(global === globalThis, typeof global);
+console.log(globalThis.marker, global.marker);
+console.log(global.process === process);
+`
+	got := runJS(t, src)
+	want := "true object\n7 7\ntrue\n"
+	if got != want {
+		t.Errorf("global alias behaviour: got %q, want %q", got, want)
+	}
+}

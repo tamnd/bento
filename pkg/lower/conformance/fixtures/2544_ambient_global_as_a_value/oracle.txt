@@ -1,0 +1,11 @@
+== stdout:
+12 12
+true true
+true object
+function function function function
+true false
+false
+true AbortError
+
+== exit:
+0

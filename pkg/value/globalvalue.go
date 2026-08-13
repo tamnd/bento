@@ -29,13 +29,15 @@ import (
 // answers undefined for everything it asks. That is the same rule the global object
 // follows (globalthis.go), and this table is what both read.
 //
-// The ceiling is statics. A hosted global carries its name and its call and nothing
-// else, so an alias reads no further: `const O = Object; O.keys(x)` finds no keys on
-// the value and fails at run time where the direct `Object.keys(x)` lowers to a
-// helper. The direct forms are what a program writes and what the lowerer claims
-// before a receiver would ever box, so the gap is narrow; it is the same one the
-// error constructors have carried since they were modeled, and it closes when the
-// statics move onto the value.
+// The ceiling is statics and construction. A hosted global carries its name and its
+// call and nothing else, so an alias reads no further: `const O = Object; O.keys(x)`
+// finds no keys on the value and fails at run time where the direct `Object.keys(x)`
+// lowers to a helper, and `const C = AbortController; new C()` finds no [[Construct]]
+// where the direct `new AbortController()` lowers to NewAbortController. The direct
+// forms are what a program writes and what the lowerer claims before a receiver or a
+// `new` callee would ever box, so the gap is narrow; it is the same one the error
+// constructors have carried since they were modeled, and it closes when the statics
+// and the construct slot move onto the value.
 
 // hostedGlobals interns one value per ambient global bento hosts. It is built once
 // at package initialization and never written after, so the concurrent reads a
@@ -146,6 +148,15 @@ func hostedGlobalCalls() map[string]callFn {
 	} {
 		m[name] = requiresNewCall(name)
 	}
+	// The globals that are classes rather than builtin functions: the event pair
+	// (event.go) and the cancellation pair (abort.go), each backed by a constructor
+	// this package already builds. A class cannot be called at all either, but V8
+	// words that refusal differently from a builtin's, so each kind says its own.
+	for _, name := range []string{
+		"Event", "EventTarget", "AbortController", "AbortSignal",
+	} {
+		m[name] = classRequiresNewCall(name)
+	}
 	return m
 }
 
@@ -155,6 +166,20 @@ func hostedGlobalCalls() map[string]callFn {
 func requiresNewCall(name string) callFn {
 	return func([]Value) Value {
 		Throw(NewTypeError(FromGoString("Constructor " + name + " requires 'new'")))
+		return Undefined
+	}
+}
+
+// classRequiresNewCall builds the call body of a global that is a class rather than
+// a builtin function. Node writes AbortController, AbortSignal, Event and
+// EventTarget as classes, and V8's refusal for one reads "Class constructor X cannot
+// be invoked without 'new'" where a builtin's reads "Constructor X requires 'new'".
+// A program catching either reads the message its own engine hands it, so the two
+// are kept apart rather than folded into one wording that would be wrong for half
+// the table.
+func classRequiresNewCall(name string) callFn {
+	return func([]Value) Value {
+		Throw(NewTypeError(FromGoString("Class constructor " + name + " cannot be invoked without 'new'")))
 		return Undefined
 	}
 }

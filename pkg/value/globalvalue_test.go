@@ -24,7 +24,7 @@ func TestGlobalValueIsOneValuePerName(t *testing.T) {
 // TestGlobalValueLooksLikeAFunction pins the two things a program reads off a global
 // before it does anything else with it: what typeof says, and what .name says.
 func TestGlobalValueLooksLikeAFunction(t *testing.T) {
-	for _, name := range []string{"atob", "setImmediate", "Symbol", "URL"} {
+	for _, name := range []string{"atob", "setImmediate", "Symbol", "URL", "AbortController"} {
 		v := GlobalValue(name)
 		if got := v.TypeOf().ToGoString(); got != "function" {
 			t.Errorf("typeof %s is %q, want \"function\"", name, got)
@@ -135,6 +135,36 @@ func TestGlobalValueRequiresNew(t *testing.T) {
 	}
 }
 
+// TestClassGlobalRefusesTheCallAsAClass pins the other half of that refusal. Node
+// writes its event and cancellation globals as JavaScript classes rather than as
+// builtin functions, and V8 words the two refusals differently, so a program
+// catching the message off AbortController reads what Node hands it rather than the
+// wording Map's refusal carries.
+func TestClassGlobalRefusesTheCallAsAClass(t *testing.T) {
+	for _, name := range []string{"Event", "EventTarget", "AbortController", "AbortSignal"} {
+		func() {
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Errorf("calling %s did not throw", name)
+					return
+				}
+				thrown, ok := r.(Thrown)
+				if !ok {
+					t.Errorf("calling %s threw %T, want a thrown value", name, r)
+					return
+				}
+				msg := ToString(Caught(thrown).ToValue()).ToGoString()
+				want := "Class constructor " + name + " cannot be invoked without 'new'"
+				if !strings.Contains(msg, want) {
+					t.Errorf("calling %s threw %q, want %q", name, msg, want)
+				}
+			}()
+			GlobalValue(name).Call()
+		}()
+	}
+}
+
 // TestObjectCoerceKeepsAnObject pins the case Object(x) is written for: an object is
 // already one, so it comes back unchanged and compares equal to what went in.
 func TestObjectCoerceKeepsAnObject(t *testing.T) {
@@ -169,7 +199,10 @@ func TestObjectCoerceRefusesAPrimitive(t *testing.T) {
 // stays unhosted so the lowerer goes on refusing it at compile time rather than
 // handing a program a value that answers undefined for everything.
 func TestHostsGlobalCoversOnlyWhatIsBuilt(t *testing.T) {
-	for _, name := range []string{"atob", "setImmediate", "Symbol", "Object", "URL", "Proxy"} {
+	for _, name := range []string{
+		"atob", "setImmediate", "Symbol", "Object", "URL", "Proxy",
+		"Event", "EventTarget", "AbortController", "AbortSignal",
+	} {
 		if !HostsGlobal(name) {
 			t.Errorf("%s is not hosted, want it hosted", name)
 		}
