@@ -35,26 +35,47 @@ import (
 // which either hosts it or hands back naming it. A member that resolves to no
 // global at all, `globalThis.foo`, is a property of the object and nothing more,
 // so it reads and writes as one.
+//
+// Node gives the same object a second name, `global`, and its own test suite uses
+// both within a few lines of each other. It is the same object here too: the name
+// lowers to the same package-level var, so `global === globalThis` holds and a
+// property written through one is read through the other.
 
 // bentoGlobalThisName is the Go identifier the global object emits under, the one
 // package-level var every reference to globalThis in the program reads.
 const bentoGlobalThisName = "bentoGlobalThis"
 
-// isGlobalThisRef reports whether n is a reference to the globalThis global rather
-// than a user binding that shares the name. The checker gives globalThis a symbol
-// with no declarations at all, since no file declares it, which is what separates
-// it from a `const globalThis = ...` a program wrote for itself: that one is a
-// variable with a declaration. isAmbientGlobal cannot settle this because it wants
-// every declaration to be in a .d.ts and there are none to look at.
+// isGlobalThisRef reports whether n is a reference to the global object rather than
+// a user binding that shares one of its two names.
+//
+// globalThis is the standard one. The checker gives it a symbol with no declarations
+// at all, since no file declares it, which is what separates it from a
+// `const globalThis = ...` a program wrote for itself: that one is a variable with a
+// declaration. isAmbientGlobal cannot settle this because it wants every declaration
+// to be in a .d.ts and there are none to look at.
+//
+// global is Node's own older name for the same object, and `global === globalThis`
+// is true in Node. bento declares it in its ambient library (aot_ambient.go) rather
+// than inheriting it, so it does have a declaration and the ambient test is the one
+// that settles it, which keeps a program's own `const global = {}` reading its own
+// binding. Both names answer here so every path built on this one, the member read
+// that resolves an unmodeled global by name and the run-time keyed read among them,
+// treats the two spellings as the one object they are.
 func (r *Renderer) isGlobalThisRef(n frontend.Node) bool {
-	if n.Kind() != frontend.NodeIdentifier || r.prog.Text(n) != "globalThis" {
+	if n.Kind() != frontend.NodeIdentifier {
 		return false
 	}
-	sym, ok := r.prog.SymbolAt(n)
-	if !ok {
-		return false
+	switch r.prog.Text(n) {
+	case "globalThis":
+		sym, ok := r.prog.SymbolAt(n)
+		if !ok {
+			return false
+		}
+		return len(r.prog.Declarations(sym)) == 0
+	case "global":
+		return r.isAmbientGlobal(n)
 	}
-	return len(r.prog.Declarations(sym)) == 0
+	return false
 }
 
 // globalThisRef lowers a globalThis reference to the package-level global object,

@@ -74,7 +74,17 @@ func IsBentoAmbientPath(p string) bool { return isAmbientPath(p) }
 // any rather than with a real interface because a Buffer's surface is the whole
 // Uint8Array prototype plus forty of its own members, and declaring a shape that wide
 // only to box every value it produces would buy nothing the dynamic path does not
-// already give. queueMicrotask is the WHATWG global that schedules a
+// already give. global is Node's own older name for the global object, the one the
+// TypeScript standard library does not declare because it is not a web global: a
+// program that writes it gets "Cannot find name 'global'" from a stock strict
+// configuration even though every Node runtime has it. It is declared as
+// typeof globalThis rather than as any, which is what @types/node calls it too,
+// because the type is what carries the honest refusal: global.crypto has to resolve
+// to the same ambient crypto globalThis.crypto resolves to, so the lowerer can
+// decline naming a global bento has not built instead of reading the undefined the
+// global object holds for it. The lowerer resolves the name itself to the same
+// object globalThis resolves to, which is what makes global === globalThis hold.
+// queueMicrotask is the WHATWG global that schedules a
 // callback on the microtask queue; the lowerer boxes the callback and emits
 // value.QueueMicrotask, and the assembled main drains the queue at its end.
 // structuredClone is the WHATWG global that deep-copies a data graph; the lowerer
@@ -127,6 +137,7 @@ declare var module: any;
 declare var exports: any;
 declare var require: any;
 declare var Buffer: any;
+declare var global: typeof globalThis;
 declare function queueMicrotask(callback: () => void): void;
 declare function setImmediate(callback: (...args: any[]) => void, ...args: any[]): number;
 declare function clearImmediate(handle: number): void;
