@@ -150,10 +150,14 @@ func hostedGlobalCalls() map[string]callFn {
 	}
 	// The globals that are classes rather than builtin functions: the event pair
 	// (event.go) and the cancellation pair (abort.go), each backed by a constructor
-	// this package already builds. A class cannot be called at all either, but V8
-	// words that refusal differently from a builtin's, so each kind says its own.
+	// this package already builds, and the three WebCrypto class names (webcrypto.go),
+	// which a program reads rather than builds since the crypto global is the only
+	// instance of any of them a host hands out. A class cannot be called at all
+	// either, but V8 words that refusal differently from a builtin's, so each kind
+	// says its own.
 	for _, name := range []string{
 		"Event", "EventTarget", "AbortController", "AbortSignal",
+		"Crypto", "CryptoKey", "SubtleCrypto",
 	} {
 		m[name] = classRequiresNewCall(name)
 	}

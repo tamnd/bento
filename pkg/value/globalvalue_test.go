@@ -141,7 +141,10 @@ func TestGlobalValueRequiresNew(t *testing.T) {
 // catching the message off AbortController reads what Node hands it rather than the
 // wording Map's refusal carries.
 func TestClassGlobalRefusesTheCallAsAClass(t *testing.T) {
-	for _, name := range []string{"Event", "EventTarget", "AbortController", "AbortSignal"} {
+	for _, name := range []string{
+		"Event", "EventTarget", "AbortController", "AbortSignal",
+		"Crypto", "CryptoKey", "SubtleCrypto",
+	} {
 		func() {
 			defer func() {
 				r := recover()
@@ -202,12 +205,16 @@ func TestHostsGlobalCoversOnlyWhatIsBuilt(t *testing.T) {
 	for _, name := range []string{
 		"atob", "setImmediate", "Symbol", "Object", "URL", "Proxy",
 		"Event", "EventTarget", "AbortController", "AbortSignal",
+		"Crypto", "CryptoKey", "SubtleCrypto",
 	} {
 		if !HostsGlobal(name) {
 			t.Errorf("%s is not hosted, want it hosted", name)
 		}
 	}
-	for _, name := range []string{"crypto", "Crypto", "WebSocket", "ReadableStream", "eval", "Math", "JSON"} {
+	// crypto is not on either list here: it is built (webcrypto.go) but it is a whole
+	// object rather than a bare value, so the lowerer reaches it the way it reaches
+	// process, console and Buffer and not through this table.
+	for _, name := range []string{"crypto", "WebSocket", "ReadableStream", "eval", "Math", "JSON"} {
 		if HostsGlobal(name) {
 			t.Errorf("%s is hosted, want it left to the compile-time refusal", name)
 		}

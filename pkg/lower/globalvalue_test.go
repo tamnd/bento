@@ -37,13 +37,15 @@ func TestHostedFunctionGlobalReadsAsItsValue(t *testing.T) {
 // TestUnhostedGlobalStillRefuses pins the rule the hosted table exists under: a
 // global whose behavior the runtime has not built keeps its compile-time refusal,
 // rather than being handed over as a value that answers undefined for everything a
-// program asks it.
+// program asks it. It named crypto until the WebCrypto surface was built
+// (webcrypto.go), and WebSocket is the same case crypto was: a global Node installs
+// and bento has not modeled.
 func TestUnhostedGlobalStillRefuses(t *testing.T) {
 	src := "const f = (x: any) => { console.log(typeof x); };\n" +
-		"f(crypto);\n"
+		"f(WebSocket);\n"
 	reason := renderProgramHandBack(t, src)
-	if !strings.Contains(reason, "the ambient global crypto read as a value") {
-		t.Fatalf("reason = %q, want the crypto refusal", reason)
+	if !strings.Contains(reason, "the ambient global WebSocket read as a value") {
+		t.Fatalf("reason = %q, want the WebSocket refusal", reason)
 	}
 }
 
@@ -214,5 +216,106 @@ func TestAStaticOnAClassGlobalStaysRefused(t *testing.T) {
 	reason := renderProgramHandBack(t, "console.log(AbortController.name);\n")
 	if !strings.Contains(reason, "the ambient global AbortController read as a value") {
 		t.Fatalf("reason = %q, want the AbortController refusal", reason)
+	}
+}
+
+// TestTheCryptoGateLowers is the gate the crypto slice closed, the four reads
+// test/common runs behind its hasCrypto guard. The guard is false on a bento binary,
+// since bento reports no openssl version, but the block still has to compile, and
+// until the WebCrypto object was built the first of those four lines was the first
+// refusal for 1016 of the suite's tests.
+func TestTheCryptoGateLowers(t *testing.T) {
+	src := `const knownGlobals = new Set();
+knownGlobals.add(globalThis.crypto);
+knownGlobals.add(globalThis.Crypto);
+knownGlobals.add(globalThis.CryptoKey);
+knownGlobals.add(globalThis.SubtleCrypto);
+console.log(String(knownGlobals.size));
+`
+	got := renderUncheckedJS(t, src)
+	for _, want := range []string{
+		"value.CryptoValue()",
+		`value.GlobalValue("Crypto")`,
+		`value.GlobalValue("CryptoKey")`,
+		`value.GlobalValue("SubtleCrypto")`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("the crypto gate is missing %s:\n%s", want, got)
+		}
+	}
+}
+
+// TestCryptoReadsAsTheRuntimeObject pins which of the two shapes the crypto name
+// takes. It is not a hosted global: a hosted global is a name and a call and
+// deliberately excludes a member receiver, and every use of crypto is a receiver, so
+// it reads as the whole runtime object the way process, console and Buffer do.
+func TestCryptoReadsAsTheRuntimeObject(t *testing.T) {
+	got := renderUncheckedJS(t, "console.log(typeof crypto);\n")
+	if !strings.Contains(got, "value.CryptoValue()") {
+		t.Fatalf("crypto did not read as the runtime object:\n%s", got)
+	}
+	if strings.Contains(got, `value.GlobalValue("crypto")`) {
+		t.Fatalf("crypto took the hosted-global route:\n%s", got)
+	}
+}
+
+// TestACryptoMemberCallDispatchesDynamically pins the reason crypto needs an entry in
+// isDynamic. The standard library types the name as a Crypto, an interface bento
+// interns no Go shape for, so without the entry the member call would try to resolve
+// against that shape instead of dispatching off the object.
+func TestACryptoMemberCallDispatchesDynamically(t *testing.T) {
+	got := renderUncheckedJS(t, "const a = new Uint8Array(4);\ncrypto.getRandomValues(a);\nconsole.log(crypto.randomUUID().length);\n")
+	if !strings.Contains(got, "value.CryptoValue()") {
+		t.Fatalf("the receiver did not reach the crypto object:\n%s", got)
+	}
+	for _, want := range []string{`"getRandomValues"`, `"randomUUID"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("the member call did not dispatch by name on %s:\n%s", want, got)
+		}
+	}
+}
+
+// TestALocalBindingNamedCryptoIsItsOwn pins the shadow rule for the name. A binding a
+// function declares is not the ambient global, so it reads the slot the program
+// wrote; the top-level case is a different matter and still refuses, since the
+// checker resolves every reference in the file to the library's symbol.
+func TestALocalBindingNamedCryptoIsItsOwn(t *testing.T) {
+	got := renderUncheckedJS(t, "function f() { const crypto = 3; return crypto; }\nconsole.log(f());\n")
+	if strings.Contains(got, "value.CryptoValue()") {
+		t.Fatalf("a local binding named crypto read the crypto object:\n%s", got)
+	}
+}
+
+// TestTheCryptoClassNamesRefuseTheirCall pins the ceiling the three class names sit
+// under, the same one AbortController sits under: the value carries a name and a call
+// and no statics, so a member read off one keeps refusing at compile time.
+func TestTheCryptoClassNamesRefuseTheirCall(t *testing.T) {
+	reason := renderProgramHandBack(t, "console.log(Crypto.name);\n")
+	if !strings.Contains(reason, "the ambient global Crypto read as a value") {
+		t.Fatalf("reason = %q, want the Crypto refusal", reason)
+	}
+}
+
+// TestCryptoRunsAsTheWebCryptoGlobal is the behaviour end to end: the identity the
+// known-globals set rests on, the two members that are real, and the refusal the
+// subtle surface carries.
+func TestCryptoRunsAsTheWebCryptoGlobal(t *testing.T) {
+	skipIfShort(t)
+	src := `console.log(typeof crypto, crypto === globalThis.crypto);
+console.log(typeof crypto.subtle, typeof crypto.randomUUID, typeof crypto.subtle.digest);
+const id = crypto.randomUUID();
+console.log(id.length, id.charAt(14));
+const bytes = new Uint8Array(16);
+console.log(crypto.getRandomValues(bytes) === bytes);
+try {
+  crypto.subtle.digest("SHA-256", bytes);
+} catch (e) {
+  console.log(e.name);
+}
+`
+	got := runJS(t, src)
+	want := "object true\nobject function function\n36 4\ntrue\nTypeError\n"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
 	}
 }

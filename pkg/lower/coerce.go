@@ -421,6 +421,14 @@ func (r *Renderer) isDynamic(n frontend.Node) bool {
 	if r.isGlobalRef(n, "console") {
 		return true
 	}
+	// crypto is the same story once more. The standard library declares it as a
+	// Crypto, an interface with subtle, getRandomValues and randomUUID on it, and
+	// bento interns no Go shape for that; what backs the name is a value.Object
+	// (webcrypto.go). Buffer, the other global that reads as a whole runtime object,
+	// needs no entry here because bento declares it itself and declares it any.
+	if r.isGlobalRef(n, "crypto") {
+		return true
+	}
 	// An ambient global bento hosts a value form for is that value, whatever the
 	// standard library types the name. Symbol is a SymbolConstructor and atob is a
 	// (data: string) => string to the checker, shapes with no Go declaration behind

@@ -1,0 +1,14 @@
+== stdout:
+4 true true
+true true
+object object
+function function function
+function function function
+36 4 5
+false
+true 16
+TypeMismatchError: The data argument must be an integer-type TypedArray
+3
+
+== exit:
+0
