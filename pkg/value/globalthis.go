@@ -36,12 +36,15 @@ func GlobalThisValue() Value {
 	}
 	g := NewObject()
 	// globalThis names itself, so the property is installed on the object it points
-	// at, after the object exists. process and console are the Node globals bento
-	// hosts as values today; the list grows as the lowerer learns to host another.
+	// at, after the object exists. process, console, Buffer and crypto are the Node
+	// globals bento backs with a whole object rather than a bare value, each read
+	// through the dynamic member path; the list grows as the lowerer learns to host
+	// another.
 	defineGlobal(g, "globalThis", g)
 	defineGlobal(g, "process", ProcessValue())
 	defineGlobal(g, "console", ConsoleObject())
 	defineGlobal(g, "Buffer", BufferConstructor())
+	defineGlobal(g, "crypto", CryptoValue())
 	// The globals with a value form (globalvalue.go) go on by the same rule, and by
 	// the same identity: the entry is the interned value the bare name reads, so
 	// globalThis.atob === atob holds the way globalThis.process === process does. A

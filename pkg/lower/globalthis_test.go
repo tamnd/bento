@@ -51,11 +51,13 @@ func TestGlobalThisMemberOfAModelledGlobalReadsThatGlobal(t *testing.T) {
 	}
 }
 
-// TestGlobalThisMemberOfAnUnmodelledGlobalHandsBack keeps the read honest. crypto is a
-// global Node has and bento has not built, so the answer the global object holds for
-// it is undefined, which is not the answer. Naming it is the handback.
+// TestGlobalThisMemberOfAnUnmodelledGlobalHandsBack keeps the read honest. WebSocket
+// is a global Node has and bento has not built, so the answer the global object holds
+// for it is undefined, which is not the answer. Naming it is the handback. It read
+// globalThis.crypto until the WebCrypto surface was built (webcrypto.go); what the
+// test needs is a name nothing here models, not that particular one.
 func TestGlobalThisMemberOfAnUnmodelledGlobalHandsBack(t *testing.T) {
-	handsBackJS(t, "console.log(typeof globalThis.crypto);\n")
+	handsBackJS(t, "console.log(typeof globalThis.WebSocket);\n")
 }
 
 // TestGlobalThisReferenceEmitsTheGlobalObject pins the emit: one package-level object
@@ -125,11 +127,23 @@ func TestGlobalReadsTheSameObjectGlobalThisDoes(t *testing.T) {
 }
 
 // TestGlobalMemberOfAnUnmodelledGlobalHandsBack pins that the honest refusal reaches
-// through the alias too. global.crypto is a real object in Node and bento has not
-// built one, so reading the undefined the global object holds for it would be a wrong
-// answer under either spelling.
+// through the alias too. global.WebSocket is a real constructor in Node and bento has
+// not built one, so reading the undefined the global object holds for it would be a
+// wrong answer under either spelling. It read global.crypto until the WebCrypto
+// surface was built (webcrypto.go), which is the whole point of the test: the name it
+// asks about has to be one nothing here models.
 func TestGlobalMemberOfAnUnmodelledGlobalHandsBack(t *testing.T) {
-	handsBackJS(t, "console.log(typeof global.crypto);\n")
+	handsBackJS(t, "console.log(typeof global.WebSocket);\n")
+}
+
+// TestGlobalMemberOfAModelledGlobalReadsIt is the other side of that rule. crypto is
+// modeled now, so global.crypto reaches the one crypto object rather than refusing,
+// and it is the same object the bare name and globalThis.crypto reach.
+func TestGlobalMemberOfAModelledGlobalReadsIt(t *testing.T) {
+	out := renderUncheckedJS(t, "console.log(global.crypto === globalThis.crypto, crypto === global.crypto);\n")
+	if strings.Count(out, "value.CryptoValue()") != 4 {
+		t.Errorf("the three spellings did not each reach the crypto object:\n%s", out)
+	}
 }
 
 // TestALocalBindingNamedGlobalIsItsOwn pins the shadow rule. A binding a function

@@ -86,10 +86,25 @@ func NewAbortSignalAborted(reason Value) Value {
 }
 
 // newAbortError builds the DOMException-shaped error a signal aborted with no reason
-// carries, the "This operation was aborted" AbortError Node hands a consumer. bento has
-// no DOMException type, so it uses the runtime Error family with the AbortError name, the
-// same name-carrying model the built-in errors take, boxed to the value a catch reads.
+// carries, the "This operation was aborted" AbortError Node hands a consumer.
 func newAbortError() Value {
-	e := &Error{name: FromGoString("AbortError"), message: FromGoString("This operation was aborted")}
-	return e.ToValue()
+	return newDOMException("AbortError", "This operation was aborted").ToValue()
+}
+
+// newDOMException builds the stand-in bento uses wherever a web API throws a
+// DOMException: the abort pair here and the two refusals crypto.getRandomValues
+// carries (webcrypto.go). bento has no DOMException type, so it uses the runtime
+// Error family with the exception's name on it, the same name-carrying model the
+// built-in errors take, boxed to the value a catch reads. What that gives up is the
+// brand: e.name and e.message read as Node writes them, while e.constructor.name
+// reads Error where Node reads DOMException, and there is no code property. A
+// program that branches on the name, which is how the abort and quota cases are
+// written, reads the same thing either way.
+//
+// It answers the *Error rather than the boxed value, because the two callers want
+// different halves of it: an abort stores the value on the signal for a consumer to
+// read, and getRandomValues throws it, and only the *Error is a Thrown a catch
+// binds with its name and message apart.
+func newDOMException(name, message string) *Error {
+	return &Error{name: FromGoString(name), message: FromGoString(message)}
 }

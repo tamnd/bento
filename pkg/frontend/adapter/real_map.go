@@ -27,7 +27,16 @@ func mapTypeFlags(f shim.TypeFlags) TypeFlags {
 	set(shim.TypeFlagsBoolean|shim.TypeFlagsBooleanLiteral, TypeBoolean)
 	set(shim.TypeFlagsNumber|shim.TypeFlagsNumberLiteral, TypeNumber)
 	set(shim.TypeFlagsBigInt|shim.TypeFlagsBigIntLiteral, TypeBigInt)
-	set(shim.TypeFlagsString|shim.TypeFlagsStringLiteral, TypeString)
+	// StringLike is the checker's own name for every type whose values are strings:
+	// string, a string literal, a template literal type such as
+	// `${string}-${string}`, and a string mapping such as Uppercase<T>. All four
+	// lower to the same bstr, so the whole family collapses to TypeString here rather
+	// than the first two alone. The last two carry no constant, and TypeLiteral is set
+	// from the checker's Literal flag, which excludes them, so a template literal type
+	// arrives as a string with no known value, which is what it is. Before this the
+	// pair mapped to no flag at all and a binding holding one, `const u =
+	// crypto.randomUUID()`, refused with flags 0 naming no type at the position.
+	set(shim.TypeFlagsStringLike, TypeString)
 	set(shim.TypeFlagsESSymbol, TypeSymbol)
 	set(shim.TypeFlagsLiteral, TypeLiteral)
 	set(shim.TypeFlagsObject, TypeObject)

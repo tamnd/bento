@@ -187,6 +187,17 @@ func (r *Renderer) bufferRef() ast.Expr {
 	return &ast.CallExpr{Fun: sel("value", "BufferConstructor")}
 }
 
+// cryptoRef lowers a bare crypto reference to the runtime's WebCrypto object. Like
+// Buffer it needs no package-level variable, because the runtime builds the object
+// once and caches it, so every reference reaches the one object and
+// globalThis.crypto is that same object. It has no static path either: every use of
+// the name is a member read off it, crypto.randomUUID() or crypto.subtle, which
+// isDynamic routes through the dynamic member and call paths from here.
+func (r *Renderer) cryptoRef() ast.Expr {
+	r.requireImport(valuePkg)
+	return &ast.CallExpr{Fun: sel("value", "CryptoValue")}
+}
+
 // commonjsModuleDecls returns the package-level declarations that back the module,
 // exports, and require globals, or nil when the program named none of them. The
 // exports object is declared first and the module object holds it under the

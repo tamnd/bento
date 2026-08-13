@@ -266,6 +266,18 @@ func (r *Renderer) lowerExpr(n frontend.Node) (ast.Expr, error) {
 		if r.isGlobalRef(n, "Buffer") {
 			return r.bufferRef(), nil
 		}
+		// crypto is the WebCrypto global, and it takes the Buffer route for the same
+		// reason: the name is a receiver far more often than it is anything else, since
+		// everything a program does with it is crypto.randomUUID(), crypto.getRandomValues(a)
+		// or crypto.subtle, and a hosted global deliberately excludes a member receiver.
+		// It lowers to the runtime's one crypto object and the member read and the call
+		// dispatch off it. Left to fall through, the name would hit the ambient-global
+		// handback below, which is where it sat until the object was built: test/common
+		// reads globalThis.crypto at load, so that handback was the first refusal for
+		// 1016 of the suite's tests.
+		if r.isGlobalRef(n, "crypto") {
+			return r.cryptoRef(), nil
+		}
 		// An ambient global read as a value that none of the modeled-global paths
 		// above lower (RegExp, String, Boolean used as an object rather than called)
 		// has no generated Go behind its name, so capitalizing the source name would
